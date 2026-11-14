@@ -1,0 +1,50 @@
+name := 'rclone-plasma'
+appid := 'com.ca-peterson.RclonePlasma'
+plasmoid := 'plasmoid/com.ca-peterson.rcloneplasma'
+prefix := env_var('HOME') / '.local'
+plugindir := prefix / 'lib64/qt6/plugins'
+dolphin_build := 'target/dolphin'
+
+default: build-release
+
+build-release:
+    cargo build --release --workspace
+    cmake -B {{dolphin_build}} -S dolphin -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={{prefix}} -DKDE_INSTALL_PLUGINDIR={{plugindir}}
+    cmake --build {{dolphin_build}}
+
+test:
+    cargo test --workspace
+
+# Everything CI runs
+ci:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace
+    cmake -B {{dolphin_build}} -S dolphin && cmake --build {{dolphin_build}}
+
+# Install under ~/.local. Dolphin finds the plugins through QT_PLUGIN_PATH, which a Plasma env
+# script sets from the next login (start Dolphin with it set to test before then).
+install-user: build-release
+    install -Dm0755 target/release/{{name}} {{prefix}}/bin/{{name}}
+    sed 's|@BINDIR@|{{prefix}}/bin|' dbus/{{appid}}.service | install -Dm0644 /dev/stdin {{prefix}}/share/dbus-1/services/{{appid}}.service
+    -busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig
+    cp -r icons/hicolor/. {{prefix}}/share/icons/hicolor/
+    -touch {{prefix}}/share/icons/hicolor
+    printf '[Desktop Entry]\nName=rclone UI\nExec={{name}} --settings\nIcon={{name}}\nType=Application\nNoDisplay=true\n' | install -Dm0644 /dev/stdin {{prefix}}/share/applications/{{appid}}.desktop
+    kpackagetool6 -t Plasma/Applet -u {{plasmoid}} >/dev/null 2>&1 || kpackagetool6 -t Plasma/Applet -i {{plasmoid}}
+    cmake --install {{dolphin_build}}
+    printf 'export QT_PLUGIN_PATH="{{plugindir}}${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"\n' | install -Dm0644 /dev/stdin ~/.config/plasma-workspace/env/{{name}}.sh
+    # Restart a running daemon so it picks up the new binary (D-Bus starts it again on demand).
+    -pkill -x -f '{{prefix}}/bin/{{name}} --daemon'
+
+uninstall-user:
+    if [ -x {{prefix}}/bin/{{name}} ]; then {{prefix}}/bin/{{name}} --offline-remove; fi
+    -pkill -x -f '{{prefix}}/bin/{{name}} --daemon'
+    -kpackagetool6 -t Plasma/Applet -r com.ca-peterson.rcloneplasma
+    rm -f {{prefix}}/bin/{{name}} {{prefix}}/share/dbus-1/services/{{appid}}.service {{prefix}}/share/applications/{{appid}}.desktop ~/.config/plasma-workspace/env/{{name}}.sh
+    rm -f {{plugindir}}/kf6/overlayicon/rcloneoverlayplugin.so {{plugindir}}/kf6/kfileitemaction/rclonefileitemaction.so
+    find {{prefix}}/share/icons/hicolor -name 'rclone-plasma*' -delete
+
+# Tests against the installed rclone (throwaway `rclone rcd`), from the core crate
+test-live:
+    cd ../cosmic-rclone-ui && just test-live
