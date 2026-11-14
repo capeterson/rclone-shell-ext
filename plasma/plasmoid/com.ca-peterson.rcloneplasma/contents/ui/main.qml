@@ -90,11 +90,9 @@ PlasmoidItem {
     toolTipMainText: available ? (status.healthLabel || i18n("rclone UI")) : i18n("rclone UI service not running")
     toolTipSubText: available ? (status.speedText || "") : ""
 
+    // Plasma's default compact representation shows Plasmoid.icon (which follows the health)
+    // and handles click-to-expand the way panels expect.
     preferredRepresentation: compactRepresentation
-    compactRepresentation: CompactRepresentation {
-        iconName: root.iconName
-        onToggle: root.expanded = !root.expanded
-    }
     fullRepresentation: FullRepresentation {
         host: root
     }
