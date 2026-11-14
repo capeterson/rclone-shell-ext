@@ -7,16 +7,16 @@ build-release:
     cargo build --release
 
 check:
-    cargo clippy --all-targets --locked -- -D warnings
+    cargo clippy --all-targets --workspace --locked -- -D warnings
 
 test:
-    cargo test --locked
+    cargo test --workspace --locked
 
 # Everything CI runs
 ci:
-    cargo fmt --check
-    cargo clippy --all-targets --locked -- -D warnings
-    cargo test --locked
+    cargo fmt --all --check
+    cargo clippy --all-targets --workspace --locked -- -D warnings
+    cargo test --workspace --locked
 
 # Print one status snapshot without the panel
 status:
@@ -42,7 +42,7 @@ test-live:
     pid=$!
     trap 'kill $pid 2>/dev/null; rm -rf "$dir"' EXIT
     sleep 2
-    RCS_IT_DIR="$dir" cargo test --locked -- --ignored real_rclone
+    RCS_IT_DIR="$dir" cargo test --workspace --locked -- --ignored real_rclone
 
 devid := 'com.ca-peterson.CosmicRcloneUiDev'
 

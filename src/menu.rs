@@ -10,7 +10,7 @@
 //! anyway: a non-resizable window, fixed-height sections and fixed column widths.
 
 use crate::config::expand;
-use crate::config::Config;
+use crate::config::{Config, ConfigExt};
 use crate::drive::{self, DriveInfo, Kind, Permission};
 use crate::keeper;
 use crate::mime_icon;

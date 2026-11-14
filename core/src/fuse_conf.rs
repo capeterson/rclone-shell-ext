@@ -12,22 +12,37 @@ use std::process::Command;
 
 pub const PATH: &str = "/etc/fuse.conf";
 
-/// The backup's name is `<file>` + this + a timestamp + `.bak`, next to the original.
-pub const BACKUP_INFIX: &str = ".cosmic-rclone-ui-";
+/// The app name used in the backup's name and the added comment. `/etc/fuse.conf` is shared by
+/// every build, so the dev build's `-dev` suffix is left off.
+fn app_name() -> &'static str {
+    let slug = crate::identity::identity().slug;
+    slug.strip_suffix("-dev").unwrap_or(slug)
+}
 
-/// Run as `sh -c ENABLE_SCRIPT sh <fuse.conf path>` (through pkexec for the real file). Adds the
-/// line unless it's already there, creating the file if needed. Before changing an existing file
-/// it copies it to a timestamped backup beside it and prints the backup's path; if the copy
+/// The backup's name is `<file>` + this + a timestamp + `.bak`, next to the original.
+pub fn backup_infix() -> String {
+    format!(".{}-", app_name())
+}
+
+/// The script run as `sh -c SCRIPT sh <fuse.conf path>` (through pkexec for the real file). Adds
+/// the line unless it's already there, creating the file if needed. Before changing an existing
+/// file it copies it to a timestamped backup beside it and prints the backup's path; if the copy
 /// fails nothing is changed.
-const ENABLE_SCRIPT: &str = r#"f="$1"
+fn enable_script() -> String {
+    format!(
+        r#"f="$1"
 if [ -f "$f" ] && grep -qxE '[[:space:]]*user_allow_other[[:space:]]*' "$f"; then exit 0; fi
 if [ -e "$f" ]; then
-  b="$f.cosmic-rclone-ui-$(date +%Y%m%d-%H%M%S).bak"
+  b="$f{infix}$(date +%Y%m%d-%H%M%S).bak"
   cp -p "$f" "$b" || exit 3
   echo "$b"
 fi
-printf '\n# Added by cosmic-rclone-ui for offline folders\nuser_allow_other\n' >> "$f" || exit 4
-"#;
+printf '\n# Added by {app} for offline folders\nuser_allow_other\n' >> "$f" || exit 4
+"#,
+        infix = backup_infix(),
+        app = app_name(),
+    )
+}
 
 /// Run the script on `path`, through `prefix` (e.g. `pkexec`) if given. Returns the backup's
 /// path when the file was changed and a backup made.
@@ -41,7 +56,7 @@ fn run_script(prefix: Option<&str>, path: &str) -> Result<Option<String>, String
         None => Command::new("/bin/sh"),
     };
     let out = cmd
-        .args(["-c", ENABLE_SCRIPT, "sh", path])
+        .args(["-c", &enable_script(), "sh", path])
         .stderr(std::process::Stdio::inherit())
         .output()
         .map_err(|e| format!("Couldn't run {}: {e}", prefix.unwrap_or("sh")))?;
@@ -106,7 +121,7 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.to_string_lossy().contains(BACKUP_INFIX))
+            .filter(|p| p.to_string_lossy().contains(&backup_infix()))
             .collect()
     }
 
@@ -120,7 +135,7 @@ mod tests {
             .unwrap()
             .expect("a backup");
         assert!(
-            backup.starts_with(&format!("{}{BACKUP_INFIX}", f.display())),
+            backup.starts_with(&format!("{}{}", f.display(), backup_infix())),
             "{backup}"
         );
         assert!(std::path::Path::new(&backup)
@@ -173,6 +188,6 @@ mod tests {
 
     #[test]
     fn the_backup_name_in_the_script_matches_the_constant() {
-        assert!(ENABLE_SCRIPT.contains(&format!("$f{BACKUP_INFIX}")));
+        assert!(enable_script().contains(&format!("$f{}", backup_infix())));
     }
 }

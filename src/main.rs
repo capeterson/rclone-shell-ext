@@ -2,22 +2,18 @@
 
 mod app;
 mod config;
-mod conflict;
 mod context_menu;
-mod drive;
-mod fuse_conf;
-mod keeper;
 mod menu;
 mod mime_icon;
-mod pin;
-mod rc;
 mod settings;
-mod share;
-mod status;
-#[cfg(test)]
-mod testutil;
-mod units;
-mod version;
+
+use config::ConfigExt as _;
+
+// The toolkit-free logic lives in `rclone-ui-core`; re-exported so `crate::rc::...` paths work.
+pub use rclone_ui_core::{
+    conflict, drive, fuse_conf, history, keeper, offline_setup, pin, rc, share, status, units,
+    version,
+};
 
 /// Build with `APP_ID_OVERRIDE=...` to get a side-by-side dev copy with its own panel
 /// identity and config (see `just install-dev`).
@@ -26,7 +22,21 @@ pub const APP_ID: &str = match option_env!("APP_ID_OVERRIDE") {
     None => "com.ca-peterson.CosmicRcloneUi",
 };
 
+/// Folder and unit-name slug: the dev build keeps its own.
+fn slug() -> &'static str {
+    if APP_ID.ends_with("Dev") {
+        "cosmic-rclone-ui-dev"
+    } else {
+        "cosmic-rclone-ui"
+    }
+}
+
 fn main() -> cosmic::iced::Result {
+    rclone_ui_core::identity::set_identity(rclone_ui_core::identity::Identity {
+        slug: slug(),
+        app_id: APP_ID,
+    });
+    rclone_ui_core::config::set_store(Box::new(config::CosmicStore::new(APP_ID)));
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = offline_cli(&args) {
         std::process::exit(code);

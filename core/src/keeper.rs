@@ -595,7 +595,7 @@ impl Keeper {
     }
 
     fn cycle(&mut self) {
-        self.cfg = Config::load(crate::APP_ID);
+        self.cfg = crate::config::store().load();
         self.state = OfflineState::load();
         let online = rc::is_mounted(&self.cfg.mount_path)
             && rc::rc_request(&self.cfg, "rc/noop", &json!({})).is_ok();
@@ -977,7 +977,7 @@ fn pin_is_mounted(cfg: &Config, rel: &str) -> bool {
 /// `--offline-keeper`: run forever.
 pub fn run() -> ! {
     let mut k = Keeper {
-        cfg: Config::load(crate::APP_ID),
+        cfg: crate::config::store().load(),
         state: OfflineState::load(),
         synced_print: HashMap::new(),
     };
@@ -1000,7 +1000,7 @@ fn pin_for_id(cfg: &Config, id: &str) -> Option<String> {
 /// `--pin-mount ID`: replace this process with the rclone mount of that folder's local copy on
 /// top of its place in the Drive mount (run by `<app>-pin@ID.service`).
 pub fn pin_mount(id: &str) -> Result<(), String> {
-    let cfg = Config::load(crate::APP_ID);
+    let cfg = crate::config::store().load();
     let rel = pin_for_id(&cfg, id).ok_or_else(|| format!("No offline folder has id {id}"))?;
     let local = pin::local_dir(&rel);
     let mp = pin::mount_point(&cfg, &rel);
@@ -1027,7 +1027,7 @@ pub fn pin_mount(id: &str) -> Result<(), String> {
 
 /// `--pin-unmount ID`: make sure the folder's mount is gone (after its unit stops).
 pub fn pin_unmount(id: &str) {
-    let cfg = Config::load(crate::APP_ID);
+    let cfg = crate::config::store().load();
     if let Some(rel) = pin_for_id(&cfg, id) {
         let mp = pin::mount_point(&cfg, &rel);
         if rc::is_mounted(&mp.to_string_lossy()) {
@@ -1038,7 +1038,7 @@ pub fn pin_unmount(id: &str) {
 
 /// `--pin PATH` / `--unpin PATH` from the command line or the menu. Returns the relative path.
 pub fn set_pinned(path: &str, pinned: bool) -> Result<String, String> {
-    let cfg = Config::load(crate::APP_ID);
+    let cfg = crate::config::store().load();
     if !cfg.offline_enabled {
         return Err("Offline folders are turned off; turn them on in the settings first".into());
     }
@@ -1048,13 +1048,13 @@ pub fn set_pinned(path: &str, pinned: bool) -> Result<String, String> {
     if pinned {
         let fs = rc::mount_fs(&cfg.mount_path).ok_or("The Drive mount is down")?;
         let rel = pin::normalize(&cfg.mount_path, &abs, abs.is_dir(), &cfg.pins, &fs)?;
-        Config::save(crate::APP_ID, |c| c.pins.push(rel.clone()))?;
+        crate::config::store().save(&mut |c| c.pins.push(rel.clone()))?;
         Ok(rel)
     } else {
         if !cfg.pins.contains(&rel) {
             return Err("This folder isn't kept offline".into());
         }
-        Config::save(crate::APP_ID, |c| c.pins.retain(|p| *p != rel))?;
+        crate::config::store().save(&mut |c| c.pins.retain(|p| *p != rel))?;
         Ok(rel)
     }
 }

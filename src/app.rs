@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::config::Config;
+use crate::config::{Config, ConfigExt, CosmicConfig};
+use crate::history::with_changes;
 use crate::mime_icon;
-use crate::pin::{self, Change, OfflineState};
+use crate::pin::{self, OfflineState};
 use crate::rc::{self, human, ChangeKind, CompletedTransfer, Direction, Health, Status};
 use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
 use cosmic::iced::platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup};
@@ -295,29 +296,6 @@ fn recent_caption(t: &CompletedTransfer, now: jiff::Timestamp) -> String {
         parts.push(format!("×{}", t.times));
     }
     parts.join(" · ")
-}
-
-/// rclone's transfer history with offline-folder changes mixed in, newest first. rclone can't
-/// say what kind of change a transfer was, so offline folders' come from the keeper.
-fn with_changes(recent: Vec<CompletedTransfer>, changes: &[Change]) -> Vec<CompletedTransfer> {
-    if changes.is_empty() {
-        return recent;
-    }
-    let mut all = recent;
-    all.extend(changes.iter().map(|c| CompletedTransfer {
-        name: c.path.clone(),
-        size: c.size,
-        bytes: c.size.max(0),
-        at: jiff::Timestamp::from_second(c.at).ok(),
-        error: None,
-        direction: Some(c.direction),
-        times: 1,
-        kind: Some(c.kind),
-    }));
-    // Stable, so rclone's own order holds among equal times; unknown times go last.
-    all.sort_by_key(|t| std::cmp::Reverse(t.at));
-    all.truncate(rc::HISTORY_CAP);
-    all
 }
 
 /// The kind icon and its tooltip: new, changed or deleted.
@@ -624,8 +602,8 @@ impl cosmic::Application for AppModel {
         Subscription::batch(vec![
             time::every(every).map(|_| Message::Tick),
             self.core()
-                .watch_config::<Config>(Self::APP_ID)
-                .map(|update| Message::UpdateConfig(update.config)),
+                .watch_config::<CosmicConfig>(Self::APP_ID)
+                .map(|update| Message::UpdateConfig(update.config.into())),
         ])
     }
 
@@ -885,28 +863,6 @@ mod tests {
         assert_eq!(split_path("a/b/c.txt"), ("a/b", "c.txt"));
         assert_eq!(split_path("c.txt"), ("", "c.txt"));
         assert_eq!(split_path("a/b/"), ("a", "b"));
-    }
-
-    #[test]
-    fn offline_changes_are_merged_into_history_by_time() {
-        let recent = vec![
-            done("new.bin", 1, Some("2026-11-02T12:00:00Z")),
-            done("old.bin", 1, Some("2026-11-02T10:00:00Z")),
-        ];
-        let changes = [Change {
-            at: ts("2026-11-02T11:00:00Z").as_second(),
-            path: "Games/GCS/x.eqp".into(),
-            size: 7,
-            kind: ChangeKind::Updated,
-            direction: Direction::Upload,
-        }];
-        let merged = with_changes(recent.clone(), &changes);
-        let names: Vec<&str> = merged.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["new.bin", "Games/GCS/x.eqp", "old.bin"]);
-        assert_eq!(merged[1].kind, Some(ChangeKind::Updated));
-        assert_eq!(merged[1].direction, Some(Direction::Upload));
-        assert_eq!(merged[1].size, 7);
-        assert_eq!(with_changes(recent.clone(), &[]), recent);
     }
 
     #[test]

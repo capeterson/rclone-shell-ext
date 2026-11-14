@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - run: cargo fmt --check
+      - run: cargo fmt --all --check
 
   build-test:
     runs-on: ubuntu-24.04
@@ -45,5 +45,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --locked
+      - run: cargo clippy --all-targets --workspace --locked -- -D warnings
+      - run: cargo test --workspace --locked

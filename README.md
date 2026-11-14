@@ -120,6 +120,24 @@ the item still opens in Drive, just without the dialog.
 Command-line helpers: `--menu PATH` opens the window, `--share-url PATH` prints the Manage
 Sharing link, and `--menu-install` / `--menu-remove` add or remove the COSMIC Files entry.
 
+## The `rclone-ui-core` crate
+
+`core/` (package `rclone-ui-core`, lib `rclone_ui_core`) holds everything that doesn't touch a
+toolkit: the rclone RC client, status, the offline-folder keeper, systemd unit generation, the
+`/etc/fuse.conf` helper, offline setup checks, history merging and MIME icon names. It does not
+depend on libcosmic, so other front ends (e.g. KDE Plasma) can depend on it. The COSMIC applet is
+a thin UI on top of it. Two seams let a front end plug in:
+
+- **Config**: implement `config::ConfigStore` (`load` / `save`) and install it once at start-up
+  with `config::set_store`. Core code reads settings through `config::store()`. The applet
+  registers a `CosmicStore` that keeps the same `cosmic_config` entry (version 1) as before.
+- **Identity**: call `identity::set_identity(Identity { slug, app_id })` at start-up. The slug
+  names the data/state directories, systemd units, drop-in and backup files
+  (`cosmic-rclone-ui`, or `cosmic-rclone-ui-dev` for the dev build). Unset, it defaults to the
+  COSMIC applet's values.
+
+Run all tests with `cargo test --workspace`.
+
 ## Build and install
 
 ```
