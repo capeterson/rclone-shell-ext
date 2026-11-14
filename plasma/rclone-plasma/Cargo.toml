@@ -10,6 +10,8 @@ rclone-ui-core.workspace = true
 rclone-plasma-ui = { path = "../rclone-plasma-ui" }
 serde.workspace = true
 serde_json.workspace = true
+jiff = "0.2"
+zbus = "5"
 
 [lints]
 workspace = true
