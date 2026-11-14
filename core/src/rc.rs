@@ -139,8 +139,12 @@ fn fs_kind(fs: &str) -> Option<bool> {
     (i > 0 && !fs[..i].contains('/')).then_some(true)
 }
 
-/// Uploads go from a local path to a remote, downloads the other way round.
+/// Uploads go from a local path to a remote, downloads the other way round. A read through the
+/// mount reports a remote source and no destination at all: that is a download too.
 fn direction(src: Option<&str>, dst: Option<&str>) -> Option<Direction> {
+    if dst.is_none() {
+        return (fs_kind(src?)?).then_some(Direction::Download);
+    }
     match (fs_kind(src?)?, fs_kind(dst?)?) {
         (false, true) => Some(Direction::Upload),
         (true, false) => Some(Direction::Download),
@@ -1209,6 +1213,8 @@ other: /home/u/Other fuse.sshfs rw 0 0
             Some(Download)
         );
         assert_eq!(direction(Some(":drive{ab}:"), Some("gd:")), None);
+        assert_eq!(direction(Some("gd:"), None), Some(Download));
+        assert_eq!(direction(Some("/cache/vfs"), None), None);
         assert_eq!(direction(Some("/cache/vfs"), Some("gd:")), Some(Upload));
         assert_eq!(
             direction(Some("local:/cache"), Some("gd:dir")),
