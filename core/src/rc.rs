@@ -124,10 +124,16 @@ fn parse_ts(s: &str) -> Option<jiff::Timestamp> {
         .filter(|t| t.as_second() > 0)
 }
 
-/// A remote looks like `name:path`; local paths start with `/` (or `local:`).
+/// A remote looks like `name:path`; local paths start with `/` (or `local:`). rclone also
+/// reports on-the-fly backends as `:local:/path`, or with a config hash as
+/// `:local{8un-i}:/path` (the VFS cache side of an upload, since 1.75).
 fn fs_kind(fs: &str) -> Option<bool> {
     if fs.starts_with('/') || fs.starts_with("local:") || fs.starts_with("Local file system") {
         return Some(false);
+    }
+    if let Some(rest) = fs.strip_prefix(':') {
+        let backend = rest.split([':', '{', ',']).next().unwrap_or_default();
+        return (!backend.is_empty()).then_some(backend != "local");
     }
     let i = fs.find(':')?;
     (i > 0 && !fs[..i].contains('/')).then_some(true)
@@ -1191,6 +1197,18 @@ other: /home/u/Other fuse.sshfs rw 0 0
     #[test]
     fn direction_needs_one_local_and_one_remote_side() {
         use Direction::{Download, Upload};
+        assert_eq!(
+            direction(
+                Some(":local{8un-i}:/home/u/.cache/rclone/vfs/gd"),
+                Some("gd:")
+            ),
+            Some(Upload)
+        );
+        assert_eq!(
+            direction(Some("gd:"), Some(":local:/tmp/x")),
+            Some(Download)
+        );
+        assert_eq!(direction(Some(":drive{ab}:"), Some("gd:")), None);
         assert_eq!(direction(Some("/cache/vfs"), Some("gd:")), Some(Upload));
         assert_eq!(
             direction(Some("local:/cache"), Some("gd:dir")),
