@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [{ "Name": "C. A. Peterson" }],
+        "Category": "System Information",
+        "Description": "Cloud sync status and controls for rclone",
+        "EnabledByDefault": true,
+        "Icon": "rclone-plasma-synced",
+        "Id": "com.ca-peterson.rcloneplasma",
+        "License": "GPL-3.0-only",
+        "Name": "rclone UI",
+        "Version": "0.1.0",
+        "Website": ""
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": "true",
+    "X-Plasma-NotificationAreaCategory": "SystemServices"
+}

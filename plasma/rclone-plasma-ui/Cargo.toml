@@ -1,0 +1,14 @@
+[package]
+name = "rclone-plasma-ui"
+description = "Kirigami windows (details, settings) for rclone-plasma, via cxx-qt"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+rclone-ui-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
