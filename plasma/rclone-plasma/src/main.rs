@@ -4,6 +4,7 @@ mod daemon;
 mod debounce;
 mod emblems;
 mod kconfig;
+mod recheck;
 mod setconfig;
 mod snapshot;
 

@@ -2,13 +2,16 @@
 //! Overlay emblems for `FileStates`: the `SyncState` mapping, pin membership, and the bounded
 //! path cache the daemon answers from.
 
+use crate::recheck::FolderThrottle;
 use rclone_ui_core::config::{expand, Config};
 use rclone_ui_core::pin::{self, OfflineState, Phase};
 use rclone_ui_core::rc;
 use rclone_ui_core::share::{self, Provider, Target};
-use rclone_ui_core::status::{self, Local, SyncState};
+use rclone_ui_core::status::{self, Cached, Local, SyncState};
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 pub const CACHE_CAP: usize = 10_000;
 
@@ -69,11 +72,110 @@ pub enum Outcome {
     Ready(Vec<String>),
     /// Couldn't tell right now (not mounted, rc unreachable); try again later.
     Retry,
+    /// A folder computed too recently; try again at this time.
+    Defer(Instant),
 }
 
-/// Work out the emblems for one absolute path. Blocking: reads the cache metadata and asks
-/// rclone's local rc API about running transfers.
-pub fn compute(cfg: &Config, offline: &OfflineState, path: &str) -> Outcome {
+/// The VFS metadata file for `rel`: `<cache>/vfsMeta/<remote name>/<rel>`.
+fn meta_path(cfg: &Config, fs: &str, rel: &str) -> PathBuf {
+    // `gdrive:` -> `gdrive`; `gdrive:sub/dir` -> `gdrive/sub/dir`.
+    let name = fs.replacen(':', "/", 1);
+    Path::new(&expand(&cfg.cache_dir))
+        .join("vfsMeta")
+        .join(name.trim_end_matches('/'))
+        .join(rel)
+}
+
+/// Parse one `vfsMeta` file the way core does (its parser is private).
+fn parse_meta(text: &str) -> Option<Cached> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let size = v
+        .get("Size")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let size = u64::try_from(size).unwrap_or(0);
+    let have: u64 = v
+        .get("Rs")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, |rs| {
+            rs.iter()
+                .filter_map(|r| r.get("Size").and_then(serde_json::Value::as_i64))
+                .map(|n| u64::try_from(n).unwrap_or(0))
+                .sum()
+        })
+        .min(size);
+    Some(Cached {
+        size,
+        have,
+        mtime: v
+            .get("ModTime")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|t| t.parse().ok()),
+        dirty: v
+            .get("Dirty")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+/// Names of the files rclone is transferring right now (one `core/stats` call).
+fn running_names(cfg: &Config) -> Option<HashSet<String>> {
+    let stats = rc::rc_request(cfg, "core/stats", &serde_json::json!({})).ok()?;
+    Some(
+        stats
+            .get("transferring")
+            .and_then(serde_json::Value::as_array)
+            .map_or_else(HashSet::new, |a| {
+                a.iter()
+                    .filter_map(|t| t.get("name").and_then(serde_json::Value::as_str))
+                    .map(str::to_string)
+                    .collect()
+            }),
+    )
+}
+
+fn folder_sync(sum: &status::FolderSummary) -> Option<SyncState> {
+    if sum.uploading > 0 {
+        Some(SyncState::Uploading)
+    } else if sum.downloading > 0 {
+        Some(SyncState::Downloading)
+    } else {
+        None
+    }
+}
+
+/// Work out the emblems for a batch of absolute paths. Blocking: reads cache metadata and
+/// asks rclone's local rc API about running transfers once for the whole batch (and only if
+/// some path needs it). Files read their VFS metadata directly. Folders walk the cache tree,
+/// so with nothing transferring they get no sync emblem without a walk, and otherwise are
+/// recomputed at most once per `FOLDER_MIN_INTERVAL` (`Outcome::Defer`).
+pub fn compute_batch(
+    cfg: &Config,
+    offline: &OfflineState,
+    paths: &[String],
+    throttle: &mut FolderThrottle,
+    now: Instant,
+) -> Vec<(String, Outcome)> {
+    // `None`: not fetched yet; `Some(None)`: the fetch failed.
+    let running = OnceCell::new();
+    let fs = OnceCell::new();
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let o = compute_one(cfg, offline, path, &running, &fs, throttle, now);
+        out.push((path.clone(), o));
+    }
+    out
+}
+
+fn compute_one(
+    cfg: &Config,
+    offline: &OfflineState,
+    path: &str,
+    running: &OnceCell<Option<HashSet<String>>>,
+    fs: &OnceCell<Option<String>>,
+    throttle: &mut FolderThrottle,
+    now: Instant,
+) -> Outcome {
     let Some(rel) = rel_in_mount(cfg, path) else {
         return Outcome::Ready(Vec::new());
     };
@@ -86,34 +188,49 @@ pub fn compute(cfg: &Config, offline: &OfflineState, path: &str) -> Outcome {
             Outcome::Retry
         };
     };
-    let Some(fs) = rc::mount_fs(&cfg.mount_path) else {
+    let Some(fs) = fs.get_or_init(|| rc::mount_fs(&cfg.mount_path)).clone() else {
         return Outcome::Retry;
     };
-    let target = Target {
-        provider: Provider::GoogleDrive,
-        id: String::new(),
-        is_dir: meta.is_dir(),
-        fs,
-        rel,
-    };
-    let Ok(local) = status::local(cfg, &target) else {
+    let Some(names) = running.get_or_init(|| running_names(cfg)).as_ref() else {
         return Outcome::Retry;
     };
-    let sync = match local {
-        Local::File {
-            transferring,
-            cached,
-        } => status::file_state(transferring, cached.as_ref(), None).or(Some(SyncState::InSync)),
-        Local::Folder(sum) => {
-            if sum.uploading > 0 {
-                Some(SyncState::Uploading)
-            } else if sum.downloading > 0 {
-                Some(SyncState::Downloading)
-            } else {
-                None
+    // Offline-folder activity is worked out inside core; defer to it for those paths.
+    let in_pin = cfg.offline_enabled && pin::covering_pin(&cfg.pins, &rel).is_some();
+    if meta.is_dir() && names.is_empty() && !in_pin {
+        return Outcome::Ready(emblem_list(None, mark));
+    }
+    if meta.is_dir() || in_pin {
+        if meta.is_dir() {
+            if let Err(at) = throttle.admit(path, now) {
+                return Outcome::Defer(at);
             }
         }
-    };
+        let target = Target {
+            provider: Provider::GoogleDrive,
+            id: String::new(),
+            is_dir: meta.is_dir(),
+            fs,
+            rel,
+        };
+        let Ok(local) = status::local(cfg, &target) else {
+            return Outcome::Retry;
+        };
+        let sync = match local {
+            Local::File {
+                transferring,
+                cached,
+            } => {
+                status::file_state(transferring, cached.as_ref(), None).or(Some(SyncState::InSync))
+            }
+            Local::Folder(sum) => folder_sync(&sum),
+        };
+        return Outcome::Ready(emblem_list(sync, mark));
+    }
+    let cached = std::fs::read_to_string(meta_path(cfg, &fs, &rel))
+        .ok()
+        .and_then(|t| parse_meta(&t));
+    let sync =
+        status::file_state(names.contains(&rel), cached.as_ref(), None).or(Some(SyncState::InSync));
     Outcome::Ready(emblem_list(sync, mark))
 }
 
@@ -263,6 +380,19 @@ mod tests {
             ..cfg
         };
         assert_eq!(pin_mark(&off_cfg, &off, "Work"), PinMark::None);
+    }
+
+    #[test]
+    fn parses_vfs_meta() {
+        let c = parse_meta(
+            r#"{"Size":100,"ModTime":"2026-01-02T03:04:05Z","Dirty":true,"Rs":[{"Pos":0,"Size":40},{"Pos":50,"Size":30}]}"#,
+        )
+        .unwrap();
+        assert_eq!((c.size, c.have, c.dirty), (100, 70, true));
+        assert!(c.mtime.is_some());
+        let d = parse_meta(r#"{"Size":10,"Rs":[{"Size":999}]}"#).unwrap();
+        assert_eq!((d.have, d.dirty, d.mtime), (10, false, None));
+        assert!(parse_meta("garbage").is_none());
     }
 
     #[test]

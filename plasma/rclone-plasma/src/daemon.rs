@@ -7,6 +7,7 @@
 
 use crate::debounce::History;
 use crate::emblems::{self, EmblemCache, Outcome};
+use crate::recheck::{self, FolderThrottle, SettleQueue};
 use crate::{setconfig, snapshot};
 use rclone_ui_core::config::{expand, store, Config};
 use rclone_ui_core::pin::OfflineState;
@@ -193,6 +194,9 @@ struct Memory {
     transfer_names: HashSet<String>,
     recent_keys: HashSet<(String, Option<String>)>,
     sig: Option<String>,
+    settle: SettleQueue,
+    sweep_cursor: usize,
+    last_sweep: Option<Instant>,
 }
 
 fn recent_keys(recent: &[CompletedTransfer]) -> HashSet<(String, Option<String>)> {
@@ -276,6 +280,7 @@ fn poll_once(shared: &Shared, mem: &mut Memory, history: &mut History) {
         shared.emit_properties(map);
     }
 
+    let now = Instant::now();
     let remounted = st.mounted && !mem.mounted;
     if remounted {
         let mut all = cached.clone();
@@ -284,8 +289,34 @@ fn poll_once(shared: &Shared, mem: &mut Memory, history: &mut History) {
         shared.enqueue(cached);
     } else if mem.sig.as_ref().is_some_and(|s| *s != sig) {
         shared.enqueue(cached);
-    } else if !changed_names.is_empty() {
-        shared.enqueue(emblems::affected(&cfg, &cached, &changed_names));
+    } else {
+        let mut recheck: Vec<String> = Vec::new();
+        if !changed_names.is_empty() {
+            // Transfer activity: recompute now, and again once rclone has settled its
+            // metadata (it is written around, or after, the end of a transfer).
+            let hit = emblems::affected(&cfg, &cached, &changed_names);
+            mem.settle.schedule(&hit, now);
+            recheck.extend(hit);
+        }
+        let due = mem.settle.drain_due(now);
+        if !due.is_empty() {
+            let known: HashSet<&String> = cached.iter().collect();
+            recheck.extend(due.into_iter().filter(|p| known.contains(p)));
+        }
+        if st.mounted
+            && mem
+                .last_sweep
+                .is_none_or(|t| now.duration_since(t) >= recheck::SWEEP_EVERY)
+        {
+            mem.last_sweep = Some(now);
+            let mut all = cached;
+            recheck.extend(recheck::round_robin(
+                &mut all,
+                &mut mem.sweep_cursor,
+                recheck::SWEEP_BATCH,
+            ));
+        }
+        shared.enqueue(recheck);
     }
     if st.mounted && st.rc_error.is_none() {
         let retry = shared.lock().cache.take_missed();
@@ -308,22 +339,49 @@ fn poller(shared: &Arc<Shared>) {
 }
 
 fn worker(shared: &Arc<Shared>, rx: &Receiver<String>) {
-    while let Ok(first) = rx.recv() {
-        let mut batch = vec![first];
+    let mut throttle = FolderThrottle::default();
+    // Folders computed too recently, with the time they may run again.
+    let mut deferred: Vec<(Instant, String)> = Vec::new();
+    loop {
+        let mut batch: Vec<String> = Vec::new();
+        if deferred.is_empty() {
+            match rx.recv() {
+                Ok(p) => batch.push(p),
+                Err(_) => return,
+            }
+        } else {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(p) => batch.push(p),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
         while batch.len() < WORKER_BATCH {
             match rx.try_recv() {
                 Ok(p) => batch.push(p),
                 Err(_) => break,
             }
         }
+        let now = Instant::now();
+        deferred.retain(|(at, p)| {
+            if *at <= now && !batch.contains(p) && batch.len() < WORKER_BATCH {
+                batch.push(p.clone());
+                false
+            } else {
+                *at > now && !batch.contains(p)
+            }
+        });
+        if batch.is_empty() {
+            continue;
+        }
         let (cfg, offline) = {
             let i = shared.lock();
             (i.cfg.clone(), i.offline.clone())
         };
+        let results = emblems::compute_batch(&cfg, &offline, &batch, &mut throttle, now);
         let mut changed = Vec::new();
-        for p in batch {
-            let outcome = emblems::compute(&cfg, &offline, &p);
-            let mut inner = shared.lock();
+        let mut inner = shared.lock();
+        for (p, outcome) in results {
             match outcome {
                 Outcome::Ready(e) => {
                     if inner.cache.insert(&p, e) {
@@ -331,8 +389,10 @@ fn worker(shared: &Arc<Shared>, rx: &Receiver<String>) {
                     }
                 }
                 Outcome::Retry => inner.cache.miss(&p),
+                Outcome::Defer(at) => deferred.push((at, p)),
             }
         }
+        drop(inner);
         shared.emit_items(&changed);
     }
 }
