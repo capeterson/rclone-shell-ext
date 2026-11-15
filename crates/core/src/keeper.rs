@@ -16,6 +16,7 @@ use crate::conflict::{self, Remote};
 use crate::pin::{self, OfflineState, Phase, PinState, Step};
 use crate::rc::{self, ChangeKind, Direction};
 use crate::units;
+use rclone_ui_i18n::fl;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::os::unix::process::CommandExt;
@@ -40,11 +41,11 @@ fn rc_job(cfg: &Config, method: &str, mut params: Value) -> Result<Value, String
     let id = started
         .get("jobid")
         .and_then(Value::as_i64)
-        .ok_or_else(|| format!("{method}: rclone didn't return a job id"))?;
+        .ok_or_else(|| fl!("offline-err-no-job-id", method = method))?;
     loop {
         std::thread::sleep(JOB_POLL);
         let st = rc::rc_request(cfg, "job/status", &json!({ "jobid": id }))
-            .map_err(|e| format!("lost contact with rclone during {method}: {e}"))?;
+            .map_err(|e| fl!("offline-err-lost-contact", method = method, error = e))?;
         if st.get("finished").and_then(Value::as_bool) == Some(true) {
             return if st.get("success").and_then(Value::as_bool) == Some(true) {
                 Ok(st)
@@ -306,12 +307,10 @@ fn bisync(cfg: &Config, remote: &str, local: &Path, resync: bool) -> Result<(), 
     // Jobs run inside rclone, so one started by an earlier keeper (before a restart or an
     // upgrade) can still be going. Never run a second one alongside it.
     if running_jobs(cfg) > 0 {
-        return Err(EARLIER_SYNC_RUNNING.into());
+        return Err(fl!("offline-err-earlier-sync"));
     }
     bisync_in(cfg, remote, local, &pin::workdir(), resync)
 }
-
-const EARLIER_SYNC_RUNNING: &str = "An earlier sync is still finishing";
 
 /// How many rc jobs rclone is still running. This keeper is what starts async jobs on the
 /// mount's rclone, so any running job is a sync it started. Unknown counts as none: if rclone
@@ -337,8 +336,6 @@ const ALL_CHANGED: &str = "all files were changed";
 
 /// The cloud folder at a pinned path has a different Drive id than the one the copy came from.
 const FOLDER_REPLACED: &str = "cloud folder was replaced";
-const FOLDER_REPLACED_WHY: &str = "The folder in the cloud was deleted and recreated, so this \
-     offline copy no longer matches it. Repair merges both sides without deleting anything.";
 
 /// bisync's "too many deletes" safety abort.
 const TOO_MANY_DELETES: &str = "too many deletes";
@@ -470,11 +467,7 @@ fn classify(err: &str) -> Failure {
     if e.contains("cannot find prior path1 or path2 listings") {
         Failure::NeedsResync
     } else if e.contains("empty current path") {
-        Failure::Attention(
-            "One side of the folder is empty, and syncing would empty the other side too. \
-             Repair brings the files back."
-                .into(),
-        )
+        Failure::Attention(fl!("offline-err-one-side-empty"))
     } else if e.contains("filters") && e.contains("resync") {
         // The filters changed since the baseline was made.
         Failure::NeedsResync
@@ -484,15 +477,11 @@ fn classify(err: &str) -> Failure {
             lock.lines().next().unwrap_or_default().trim(),
         ))
     } else if e.contains(FOLDER_REPLACED) {
-        Failure::Attention(FOLDER_REPLACED_WHY.into())
+        Failure::Attention(fl!("offline-err-folder-replaced"))
     } else if e.contains("directory not found") {
-        Failure::Attention("The folder wasn't found in the cloud (moved or deleted?)".into())
+        Failure::Attention(fl!("offline-err-cloud-folder-missing"))
     } else if e.contains("bisync aborted") || e.contains("must run --resync") {
-        Failure::Attention(
-            "Sync stopped for safety (too many deletions, or an interrupted run). \
-             Repair merges both sides without deleting anything."
-                .into(),
-        )
+        Failure::Attention(fl!("offline-err-sync-stopped"))
     } else {
         Failure::Retry(err.to_string())
     }
@@ -543,7 +532,10 @@ struct Keeper {
     synced_print: HashMap<String, u64>,
 }
 
-const FOLDER_MISSING: &str = "The folder wasn't found in the Drive mount (moved or deleted?)";
+/// Shown when the folder is gone from the Drive mount. Compared by value to clear the warning.
+fn folder_missing() -> String {
+    fl!("offline-err-mount-folder-missing")
+}
 
 fn repair_dir() -> PathBuf {
     pin::state_dir().join("repair")
@@ -560,7 +552,7 @@ fn desktop_notify(text: &str) {
         .args([
             "--app-name=rclone UI",
             "--icon=folder-sync-symbolic",
-            "Offline folders",
+            &fl!("offline-notify-title"),
             text,
         ])
         .spawn();
@@ -585,7 +577,7 @@ impl Keeper {
     /// The cloud side to use when only flushing a copy that already syncs (unpinning): by the
     /// Drive id it has been synced with, if any.
     fn remote_for(&self, rel: &str) -> Result<String, String> {
-        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or("The Drive mount is down")?;
+        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or_else(|| fl!("offline-err-mount-down"))?;
         Ok(
             match self.state.pin(rel).and_then(|p| p.folder_id.as_deref()) {
                 Some(id) => pin::remote_by_id(&fs, id),
@@ -694,7 +686,7 @@ impl Keeper {
 
     fn sync_once(&mut self, rel: &str, local: &Path, resync: bool) -> Result<(), String> {
         std::fs::create_dir_all(local).map_err(|e| e.to_string())?;
-        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or("The Drive mount is down")?;
+        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or_else(|| fl!("offline-err-mount-down"))?;
         let path_remote = pin::remote(&fs, rel);
         // Address the cloud folder by its Drive id (see `pin::remote_by_id`), when it has one.
         let known = self.state.pin(rel).and_then(|p| p.folder_id.clone());
@@ -707,7 +699,7 @@ impl Keeper {
                 return Err("directory not found: the folder is gone from the cloud".into())
             }
             Lookup::Failed(e) if known.is_some() => {
-                return Err(format!("Couldn't look up the cloud folder: {e}"))
+                return Err(fl!("offline-err-cloud-lookup", error = e))
             }
             Lookup::NotDrive | Lookup::Missing | Lookup::Failed(_) => None,
         };
@@ -729,7 +721,7 @@ impl Keeper {
             (pin::remote_by_id(&fs, id), resync)
         } else {
             if !pin::session_fits(&path_remote, &local.to_string_lossy()) {
-                return Err("The folder's path is too long for rclone bisync".into());
+                return Err(fl!("offline-err-path-too-long"));
             }
             (path_remote, resync)
         };
@@ -836,7 +828,11 @@ impl Keeper {
         desktop_notify(&if texts.len() == 1 {
             texts[0].clone()
         } else {
-            format!("Resolved {} conflicting edits in {rel}", texts.len())
+            fl!(
+                "offline-notify-conflicts-resolved",
+                count = texts.len(),
+                folder = rel
+            )
         });
         Ok(())
     }
@@ -853,18 +849,18 @@ impl Keeper {
             let p = self.pin(rel);
             if p.phase != Phase::Attention {
                 p.phase = Phase::Attention;
-                p.error = Some(FOLDER_MISSING.into());
+                p.error = Some(folder_missing());
             }
             return;
         }
         // The folder is back (e.g. a flag from an earlier boot-time race): clear that warning.
         let p = self.pin(rel);
-        if p.phase == Phase::Attention && p.error.as_deref() == Some(FOLDER_MISSING) {
+        if p.phase == Phase::Attention && p.error.as_deref() == Some(folder_missing().as_str()) {
             p.phase = Phase::Ready;
             p.error = None;
         }
         if let Err(e) = units::systemctl(&["start", &units::pin_unit_name(&pin::pin_id(rel))]) {
-            self.pin(rel).error = Some(format!("Couldn't mount the offline copy in place: {e}"));
+            self.pin(rel).error = Some(fl!("offline-err-mount-in-place", error = e));
         }
     }
 
@@ -874,8 +870,7 @@ impl Keeper {
         self.pin(rel).phase = Phase::Removing;
         if initialized && local.is_dir() {
             if !online {
-                self.pin(rel).error =
-                    Some("Waiting for a connection to upload the last changes".into());
+                self.pin(rel).error = Some(fl!("offline-err-waiting-to-upload"));
                 return;
             }
             let pushed = match self.remote_for(rel) {
@@ -883,19 +878,19 @@ impl Keeper {
                 Err(e) => Err(e),
             };
             if let Err(e) = pushed {
-                self.pin(rel).error = Some(format!("Couldn't upload the last changes: {e}"));
+                self.pin(rel).error = Some(fl!("offline-err-upload-last", error = e));
                 return;
             }
         }
         let unit = units::pin_unit_name(&pin::pin_id(rel));
         let _ = units::systemctl(&["stop", &unit]);
         if pin_is_mounted(&self.cfg, rel) {
-            self.pin(rel).error = Some("Files in the folder are still open".into());
+            self.pin(rel).error = Some(fl!("offline-err-files-open"));
             return;
         }
         let gone = remove_local(rel);
         if let Err(e) = gone {
-            self.pin(rel).error = Some(format!("Couldn't delete the local copy: {e}"));
+            self.pin(rel).error = Some(fl!("offline-err-delete-local", error = e.to_string()));
             return;
         }
         self.synced_print.remove(rel);
@@ -1040,19 +1035,19 @@ pub fn pin_unmount(id: &str) {
 pub fn set_pinned(path: &str, pinned: bool) -> Result<String, String> {
     let cfg = crate::config::store().load();
     if !cfg.offline_enabled {
-        return Err("Offline folders are turned off; turn them on in the settings first".into());
+        return Err(fl!("offline-err-turned-off"));
     }
     let abs = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
     let rel = crate::share::remote_path(&expand(&cfg.mount_path), &abs)
-        .ok_or("Not inside the Drive folder")?;
+        .ok_or_else(|| fl!("offline-err-outside-drive-folder"))?;
     if pinned {
-        let fs = rc::mount_fs(&cfg.mount_path).ok_or("The Drive mount is down")?;
+        let fs = rc::mount_fs(&cfg.mount_path).ok_or_else(|| fl!("offline-err-mount-down"))?;
         let rel = pin::normalize(&cfg.mount_path, &abs, abs.is_dir(), &cfg.pins, &fs)?;
         crate::config::store().save(&mut |c| c.pins.push(rel.clone()))?;
         Ok(rel)
     } else {
         if !cfg.pins.contains(&rel) {
-            return Err("This folder isn't kept offline".into());
+            return Err(fl!("offline-err-not-offline"));
         }
         crate::config::store().save(&mut |c| c.pins.retain(|p| *p != rel))?;
         Ok(rel)
@@ -1552,7 +1547,7 @@ mod tests {
         };
         assert_eq!(running_jobs(&cfg), 1);
         let err = bisync(&cfg, "r:x", Path::new("/l"), false).unwrap_err();
-        assert_eq!(err, EARLIER_SYNC_RUNNING);
+        assert_eq!(err, fl!("offline-err-earlier-sync"));
         assert!(!s.paths().contains(&"/sync/bisync".to_string()));
     }
 }

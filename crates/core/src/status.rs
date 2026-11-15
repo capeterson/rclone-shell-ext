@@ -12,6 +12,7 @@ use crate::drive::DriveInfo;
 use crate::rc;
 use crate::share::Target;
 use jiff::{tz::TimeZone, Timestamp};
+use rclone_ui_i18n::fl;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -45,17 +46,17 @@ pub enum SyncState {
 }
 
 impl SyncState {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            SyncState::Uploading => "Uploading",
-            SyncState::QueuedUpload => "Queued for upload",
-            SyncState::Downloading => "Downloading",
-            SyncState::InSync => "In sync (cached)",
-            SyncState::OnlineOnly => "Online only (not cached)",
-            SyncState::PartlyCached => "Partly downloaded",
-            SyncState::LocalNewer => "Local changes pending",
-            SyncState::DriveNewer => "Drive has a newer version",
-            SyncState::Differs => "Differs from Drive",
+            SyncState::Uploading => fl!("details-state-uploading"),
+            SyncState::QueuedUpload => fl!("details-state-queued-upload"),
+            SyncState::Downloading => fl!("details-state-downloading"),
+            SyncState::InSync => fl!("details-state-in-sync"),
+            SyncState::OnlineOnly => fl!("details-state-online-only"),
+            SyncState::PartlyCached => fl!("details-state-partly-cached"),
+            SyncState::LocalNewer => fl!("details-state-local-newer"),
+            SyncState::DriveNewer => fl!("details-state-drive-newer"),
+            SyncState::Differs => fl!("details-state-differs"),
         }
     }
 

@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::rc;
 use crate::share::Target;
 use jiff::Timestamp;
+use rclone_ui_i18n::fl;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -22,12 +23,12 @@ pub enum Role {
 }
 
 impl Role {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Role::Owner => "Owner",
-            Role::Editor => "Editor",
-            Role::Commenter => "Commenter",
-            Role::Viewer => "Viewer",
+            Role::Owner => fl!("drive-role-owner"),
+            Role::Editor => fl!("drive-role-editor"),
+            Role::Commenter => fl!("drive-role-commenter"),
+            Role::Viewer => fl!("drive-role-viewer"),
         }
     }
 
@@ -50,12 +51,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Kind::User => "User",
-            Kind::Group => "Group",
-            Kind::Domain => "Domain",
-            Kind::Anyone => "Anyone with link",
+            Kind::User => fl!("drive-kind-user"),
+            Kind::Group => fl!("drive-kind-group"),
+            Kind::Domain => fl!("drive-kind-domain"),
+            Kind::Anyone => fl!("drive-kind-anyone"),
         }
     }
 }
@@ -125,7 +126,7 @@ fn permission(p: RawPermission) -> Option<Permission> {
         Kind::Anyone => String::new(),
     };
     let name = match kind {
-        Kind::Anyone => "Anyone with the link".to_string(),
+        Kind::Anyone => fl!("drive-anyone-with-link"),
         _ => p
             .display_name
             .filter(|n| !n.is_empty())
@@ -179,11 +180,11 @@ fn access_token(cfg: &Config, target: &Target) -> Result<String, String> {
     let token = conf
         .get("token")
         .and_then(Value::as_str)
-        .ok_or("rclone has no token for this remote")?;
+        .ok_or_else(|| fl!("drive-err-no-token"))?;
     serde_json::from_str::<Value>(token)
         .ok()
         .and_then(|t| t.get("access_token")?.as_str().map(str::to_string))
-        .ok_or_else(|| "rclone's token is unreadable".to_string())
+        .ok_or_else(|| fl!("drive-err-token-unreadable"))
 }
 
 /// Ask Google Drive about `target`: modified time, sharing state and who has access.
@@ -206,8 +207,8 @@ fn fetch_from(base: &str, cfg: &Config, target: &Target) -> Result<DriveInfo, St
         .call();
     match reply {
         Ok(r) => parse(&r.into_json::<Value>().map_err(|e| e.to_string())?),
-        Err(ureq::Error::Status(403, _)) => Err("Google Drive denied access to this item".into()),
-        Err(ureq::Error::Status(404, _)) => Err("Google Drive can't find this item".into()),
+        Err(ureq::Error::Status(403, _)) => Err(fl!("drive-err-denied")),
+        Err(ureq::Error::Status(404, _)) => Err(fl!("drive-err-not-found")),
         Err(e) => Err(e.to_string()),
     }
 }

@@ -4,6 +4,7 @@
 
 use crate::config::Config;
 use crate::{fuse_conf, pin, rc, units};
+use rclone_ui_i18n::fl;
 
 /// What's in place for offline folders.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -39,22 +40,21 @@ impl Checks {
 
 /// The setup steps in order: title, explanation, done.
 #[must_use]
-pub fn setup_steps(c: Checks) -> [(&'static str, &'static str, bool); 3] {
+pub fn setup_steps(c: Checks) -> [(String, String, bool); 3] {
     [
         (
-            "Allow mounts inside the Drive folder",
-            "Adds user_allow_other to /etc/fuse.conf. Asks for an administrator password once.",
+            fl!("offline-step-fuse-title"),
+            fl!("offline-step-fuse-detail"),
             c.fuse_conf,
         ),
         (
-            "Background sync service",
-            "Installs and starts a user service that keeps offline folders in sync.",
+            fl!("offline-step-units-title"),
+            fl!("offline-step-units-detail"),
             c.units && c.keeper_running,
         ),
         (
-            "Restart the Drive mount",
-            "Applies --allow-other to the Drive mount. Only you can open its files. Files open in \
-             the Drive folder are interrupted once.",
+            fl!("offline-step-restart-title"),
+            fl!("offline-step-restart-detail"),
             c.mount_allows_other,
         ),
     ]
@@ -68,56 +68,50 @@ pub fn consent_items(c: Checks, cfg: &Config) -> Vec<(String, String)> {
     let mut items = vec![];
     if !c.fuse_conf {
         items.push((
-            format!("Change a system setting: {}", fuse_conf::PATH),
-            format!(
-                "Adds the line “user_allow_other”, which lets your own programs mount with \
-                 --allow-other. This needs an administrator password, which you'll be asked for \
-                 next. The current file is first copied to {p}{infix}<date-time>.bak (if that \
-                 copy fails, the file isn't touched). The line stays in place if you turn \
-                 offline folders off later.",
-                p = fuse_conf::PATH,
-                infix = fuse_conf::backup_infix(),
+            fl!("offline-consent-fuse-title", path = fuse_conf::PATH),
+            fl!(
+                "offline-consent-fuse-detail",
+                path = fuse_conf::PATH,
+                infix = fuse_conf::backup_infix()
             ),
         ));
     }
     if !c.units || !c.keeper_running {
         items.push((
-            "Install background services".to_string(),
-            format!(
-                "Adds {keeper} and {pin} to {dir}, enables the first, and ties both to {svc} \
-                 so they start and stop with the Drive mount.",
+            fl!("offline-consent-units-title"),
+            fl!(
+                "offline-consent-units-detail",
                 keeper = units::keeper_unit_name(),
                 pin = units::pin_unit_name("<folder>"),
-                dir = units::unit_dir().display(),
-                svc = cfg.service,
+                dir = units::unit_dir().display().to_string(),
+                service = cfg.service.as_str()
             ),
         ));
         items.push((
-            "Change the Drive mount's settings".to_string(),
-            format!(
-                "Adds {} so the mount runs with --allow-other, --default-permissions and umask 077. \
-                 Files in the Drive folder then show as owner-only (0600 / 0700), which keeps \
-                 other users on this computer out.",
-                units::dropin_path(&cfg.service).display()
+            fl!("offline-consent-dropin-title"),
+            fl!(
+                "offline-consent-dropin-detail",
+                path = units::dropin_path(&cfg.service).display().to_string()
             ),
         ));
     }
     if !c.mount_allows_other {
         items.push((
-            format!("Restart {}", cfg.service),
-            format!(
-                "Happens once, now. Anything open in {} is interrupted; changes waiting to upload \
-                 are kept and resume after the restart.",
-                cfg.mount_path
+            fl!(
+                "offline-consent-restart-title",
+                service = cfg.service.as_str()
+            ),
+            fl!(
+                "offline-consent-restart-detail",
+                mount = cfg.mount_path.as_str()
             ),
         ));
     }
     items.push((
-        "Afterwards".to_string(),
-        format!(
-            "Folders you choose to keep offline are downloaded to {} and use disk space there. \
-             Turning offline folders off removes the services and mount settings again.",
-            pin::data_dir().join("offline").display()
+        fl!("offline-consent-after-title"),
+        fl!(
+            "offline-consent-after-detail",
+            path = pin::data_dir().join("offline").display().to_string()
         ),
     ));
     items
@@ -129,8 +123,13 @@ pub fn set_up(cfg: &Config) -> Result<Option<String>, String> {
     let c = Checks::probe(cfg);
     let mut note = None;
     if !c.fuse_conf {
-        note = fuse_conf::enable()?
-            .map(|b| format!("The previous {} was saved as {b}", fuse_conf::PATH));
+        note = fuse_conf::enable()?.map(|b| {
+            fl!(
+                "offline-note-fuse-backup",
+                path = fuse_conf::PATH,
+                backup = b
+            )
+        });
     }
     if !c.units || !c.keeper_running {
         units::install(cfg)?;
@@ -147,7 +146,7 @@ pub fn turn_on(cfg: &Config) -> Result<Option<String>, String> {
     crate::config::store().save(&mut |c| c.offline_enabled = true)?;
     set_up(cfg).map_err(|e| {
         let _ = tear_down(cfg);
-        format!("Offline folders weren't turned on: {e}")
+        fl!("offline-err-not-turned-on", error = e)
     })
 }
 
@@ -204,7 +203,7 @@ mod tests {
             ..Checks::default()
         };
         let steps = setup_steps(c);
-        assert_eq!(steps.map(|s| s.2), [true, false, false]);
+        assert_eq!(steps.each_ref().map(|s| s.2), [true, false, false]);
         assert!(steps[0].1.contains("/etc/fuse.conf"));
         assert!(steps[2].1.contains("Only you can open"));
     }

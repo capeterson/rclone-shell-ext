@@ -14,6 +14,7 @@
 use crate::config::{expand, Config};
 use crate::rc::{ChangeKind, Direction};
 use crate::share;
+use rclone_ui_i18n::fl;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -114,31 +115,29 @@ pub fn normalize(
     pins: &[String],
     fs: &str,
 ) -> Result<String, String> {
-    let rel = share::remote_path(&expand(mount), path)
-        .ok_or_else(|| "Only items inside the Drive folder can be kept offline".to_string())?;
+    let rel =
+        share::remote_path(&expand(mount), path).ok_or_else(|| fl!("offline-err-outside-drive"))?;
     if rel.is_empty() {
-        return Err("The whole Drive can't be kept offline; pick a folder inside it".into());
+        return Err(fl!("offline-err-whole-drive"));
     }
     if !is_dir {
-        return Err("Only folders can be kept offline".into());
+        return Err(fl!("offline-err-only-folders"));
     }
     if let Some(p) = covering_pin(pins, &rel) {
         return Err(if p == rel {
-            "Already kept offline".into()
+            fl!("offline-err-already")
         } else {
-            format!("Already kept offline as part of {p}")
+            fl!("offline-err-already-part", parent = p)
         });
     }
     if let Some(p) = pins.iter().find(|p| p.starts_with(&format!("{rel}/"))) {
-        return Err(format!(
-            "Contains {p}, which is already kept offline; remove that first"
-        ));
+        return Err(fl!("offline-err-contains", pin = p.as_str()));
     }
     // Folders are synced by Drive id, so only the remote's name and the local path count. (If the
     // id can't be looked up the keeper falls back to the path and checks again.)
     let session = session_name(&remote_by_id(fs, ""), &local_dir(&rel).to_string_lossy());
     if session.len() > SESSION_NAME_MAX {
-        return Err("The folder's path is too long for rclone bisync".into());
+        return Err(fl!("offline-err-path-too-long"));
     }
     Ok(rel)
 }
@@ -172,13 +171,13 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Phase::Downloading => "Downloading for offline use",
-            Phase::Ready => "Available offline",
-            Phase::Waiting => "Waiting to sync",
-            Phase::Attention => "Needs attention",
-            Phase::Removing => "Removing offline copy",
+            Phase::Downloading => fl!("offline-phase-downloading"),
+            Phase::Ready => fl!("offline-phase-ready"),
+            Phase::Waiting => fl!("offline-phase-waiting"),
+            Phase::Attention => fl!("offline-phase-attention"),
+            Phase::Removing => fl!("offline-phase-removing"),
         }
     }
 
@@ -240,27 +239,38 @@ pub fn local_usage(rel: &str) -> (u64, u64) {
 /// 12 files (3.0 MiB) so far" or "Syncing…". `usage` is from [`local_usage`], when measured.
 pub fn describe(p: Option<&PinState>, usage: Option<(u64, u64)>) -> String {
     let Some(p) = p else {
-        return "Waiting to start…".into();
+        return fl!("offline-describe-waiting-to-start");
     };
     let files = |(n, b): (u64, u64)| {
-        let s = if n == 1 { "" } else { "s" };
-        format!("{n} file{s} ({})", crate::status::human_bytes(b))
+        fl!(
+            "offline-files-size",
+            count = n,
+            size = crate::status::human_bytes(b)
+        )
     };
     let mut line = match (p.phase, p.syncing) {
         (Phase::Downloading, _) => match usage {
-            Some(u) if u.0 > 0 => format!("{} · {} so far", p.phase.label(), files(u)),
-            _ => p.phase.label().to_string(),
+            Some(u) if u.0 > 0 => fl!(
+                "offline-describe-so-far",
+                phase = p.phase.label(),
+                files = files(u)
+            ),
+            _ => p.phase.label(),
         },
-        (Phase::Ready | Phase::Waiting, true) => "Syncing…".to_string(),
+        (Phase::Ready | Phase::Waiting, true) => fl!("offline-syncing"),
         (Phase::Ready, false) => match usage {
-            Some(u) => format!("{} · {}", p.phase.label(), files(u)),
-            None => p.phase.label().to_string(),
+            Some(u) => fl!(
+                "offline-describe-phase-files",
+                phase = p.phase.label(),
+                files = files(u)
+            ),
+            None => p.phase.label(),
         },
-        (phase, _) => phase.label().to_string(),
+        (phase, _) => phase.label(),
     };
     // While a sync runs, the error is the last attempt's and may no longer apply.
     if let Some(e) = p.error.as_deref().filter(|_| !p.syncing) {
-        line = format!("{line}: {e}");
+        line = fl!("offline-describe-error", line = line, error = e);
     }
     line
 }
@@ -353,12 +363,7 @@ impl OfflineState {
 
 /// One-line summary for the panel popup, e.g. "3 folders · all available offline".
 pub fn summary(pins: &[String], state: &OfflineState) -> String {
-    let n = pins.len();
-    let folders = if n == 1 {
-        "1 folder".to_string()
-    } else {
-        format!("{n} folders")
-    };
+    let folders = fl!("offline-folders-count", count = pins.len());
     let worst = pins
         .iter()
         .map(|r| state.pin(r).map_or(Phase::Downloading, |p| p.phase))
@@ -370,9 +375,14 @@ pub fn summary(pins: &[String], state: &OfflineState) -> String {
             Phase::Attention => 4,
         });
     match worst {
-        None => "No folders kept offline".into(),
-        Some(Phase::Ready) => format!("{folders} · all available offline"),
-        Some(p) => format!("{folders} · {}", p.label().to_lowercase()),
+        None => fl!("offline-summary-none"),
+        Some(Phase::Ready) => fl!("offline-summary-all-ready", folders = folders),
+        // Lowercased so it reads as a continuation of the line; English-only wording.
+        Some(p) => fl!(
+            "offline-summary-phase",
+            folders = folders,
+            phase = p.label().to_lowercase()
+        ),
     }
 }
 

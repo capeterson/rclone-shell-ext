@@ -5,10 +5,11 @@
 //! (nothing is changed yet), "Continue" runs the setup on a worker thread (which includes the
 //! system password prompt), and a failure undoes everything so the switch goes back off.
 
-use super::ago;
+use crate::ago;
 use rclone_ui_core::config::Config;
 use rclone_ui_core::offline_setup::{consent_items, setup_steps, Checks};
 use rclone_ui_core::pin::{self, OfflineState, Phase};
+use rclone_ui_i18n::fl;
 use serde_json::json;
 
 /// What the switch should do next.
@@ -89,12 +90,11 @@ impl SettingsState {
         self.cfg.offline_enabled || self.consent
     }
 
-    pub fn description(&self) -> &'static str {
+    pub fn description(&self) -> String {
         if self.cfg.offline_enabled && !self.cfg.pins.is_empty() {
-            "Stop keeping every folder offline before turning this off."
+            fl!("settings-offline-description-locked")
         } else {
-            "Folders you choose are fully downloaded, kept in sync both ways, and work without a \
-             connection, right where they are in the Drive folder."
+            fl!("settings-offline-description")
         }
     }
 
@@ -151,11 +151,11 @@ impl SettingsState {
         consent_items(self.checks, &self.cfg)
     }
 
-    pub fn consent_go_label(&self) -> &'static str {
+    pub fn consent_go_label(&self) -> String {
         if self.checks.fuse_conf {
-            "Continue"
+            fl!("common-continue")
         } else {
-            "Continue to password prompt"
+            fl!("settings-consent-continue-password")
         }
     }
 
@@ -165,13 +165,13 @@ impl SettingsState {
     }
 
     /// Hint under "Setup isn't complete".
-    pub fn setup_hint(&self) -> &'static str {
+    pub fn setup_hint(&self) -> String {
         if self.busy {
-            "Enter your password if asked. The Drive mount restarts once."
+            fl!("settings-setup-hint-busy")
         } else if self.checks.mounted {
-            "Runs the remaining steps above."
+            fl!("settings-setup-hint-remaining")
         } else {
-            "The Drive mount isn't running; setup will start it."
+            fl!("settings-setup-hint-mount-down")
         }
     }
 
@@ -188,11 +188,11 @@ impl SettingsState {
                     .and_then(|p| p.last_sync)
                     .filter(|_| !p.is_some_and(|p| p.syncing))
                 {
-                    label = format!("{label} · synced {}", ago(now, t));
+                    label = fl!("settings-pin-synced", label = label, when = ago(now, t));
                 }
                 PinRow {
                     rel: rel.clone(),
-                    phase: phase.label().to_string(),
+                    phase: phase.label(),
                     icon: phase.icon().to_string(),
                     label,
                     error: p.and_then(|p| p.error.clone()).unwrap_or_default(),
@@ -209,9 +209,9 @@ impl SettingsState {
                 .filter(|p| !self.cfg.pins.contains(&p.rel))
                 .map(|p| PinRow {
                     rel: p.rel.clone(),
-                    phase: Phase::Removing.label().to_string(),
+                    phase: Phase::Removing.label(),
                     icon: Phase::Removing.icon().to_string(),
-                    label: Phase::Removing.label().to_string(),
+                    label: Phase::Removing.label(),
                     error: p.error.clone().unwrap_or_default(),
                     can_repair: false,
                     removing: true,
@@ -263,14 +263,14 @@ impl SettingsState {
             offline_enabled: self.cfg.offline_enabled,
             toggle_checked: self.toggle_checked(),
             toggle_enabled: self.toggle_allowed(),
-            description: self.description().to_string(),
+            description: self.description(),
             busy: self.busy,
             consent_visible: self.consent,
             consent_json: serde_json::Value::Array(items).to_string(),
-            consent_go_label: self.consent_go_label().to_string(),
+            consent_go_label: self.consent_go_label(),
             show_setup: self.show_setup(),
             setup_steps_json: serde_json::Value::Array(steps).to_string(),
-            setup_hint: self.setup_hint().to_string(),
+            setup_hint: self.setup_hint(),
             show_pins: self.cfg.offline_enabled && !self.show_setup(),
             no_pins: self.cfg.pins.is_empty(),
             pins_json: serde_json::Value::Array(pins).to_string(),

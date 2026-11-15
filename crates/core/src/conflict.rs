@@ -12,6 +12,7 @@
 //!
 //! Every step checks what's already done, so a failure part way is fixed by running it again.
 
+use rclone_ui_i18n::fl;
 use std::path::{Path, PathBuf};
 
 pub const P1: &str = "..path1";
@@ -45,15 +46,9 @@ impl Resolved {
     pub fn notice(&self, pin: &str) -> String {
         let name = format!("{pin}/{}", self.path);
         match self.winner {
-            Winner::Same => format!("{name} was changed the same way on both sides"),
-            Winner::Local => format!(
-                "{name} was changed in two places; kept this computer's newer version (the other \
-                 is in the file's version history)"
-            ),
-            Winner::Remote => format!(
-                "{name} was changed in two places; kept the newer version from the cloud (this \
-                 computer's is in the file's version history)"
-            ),
+            Winner::Same => fl!("offline-conflict-same", name = name),
+            Winner::Local => fl!("offline-conflict-local", name = name),
+            Winner::Remote => fl!("offline-conflict-remote", name = name),
         }
     }
 }

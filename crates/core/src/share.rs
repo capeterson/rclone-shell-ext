@@ -5,6 +5,7 @@
 
 use crate::config::{expand, Config};
 use crate::rc;
+use rclone_ui_i18n::fl;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -79,29 +80,29 @@ fn resolve_with(
     mount_fs: impl Fn(&str) -> Option<String>,
 ) -> Result<Target, String> {
     let [path] = paths else {
-        return Err("Select a single file or folder".into());
+        return Err(fl!("share-err-single-item"));
     };
     let mount = expand(&cfg.mount_path);
     let rel = remote_path(&mount, Path::new(path))
-        .ok_or_else(|| format!("Not inside the rclone mount ({mount})"))?;
+        .ok_or_else(|| fl!("share-err-outside-mount", mount = mount.as_str()))?;
     if rel.is_empty() {
-        return Err("Select an item inside the mount, not the mount itself".into());
+        return Err(fl!("share-err-mount-itself"));
     }
-    let fs = mount_fs(&cfg.mount_path).ok_or("The remote is not mounted")?;
+    let fs = mount_fs(&cfg.mount_path).ok_or_else(|| fl!("share-err-not-mounted"))?;
     let name = fs.split(':').next().unwrap_or_default();
     let conf = rc::rc_request(cfg, "config/get", &json!({ "name": name }))?;
     let provider = conf
         .get("type")
         .and_then(Value::as_str)
         .and_then(Provider::from_backend)
-        .ok_or("Sharing is not supported for this kind of remote")?;
+        .ok_or_else(|| fl!("share-err-unsupported-remote"))?;
     let stat = rc::rc_request(cfg, "operations/stat", &json!({ "fs": fs, "remote": rel }))?;
     let item = stat.get("item").filter(|i| !i.is_null());
     let id = item
         .and_then(|i| i.get("ID"))
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
-        .ok_or("The remote did not report an ID for this item")?;
+        .ok_or_else(|| fl!("share-err-no-id"))?;
     let is_dir = item
         .and_then(|i| i.get("IsDir"))
         .and_then(Value::as_bool)
