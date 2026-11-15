@@ -254,3 +254,26 @@ migrate-line = rclone-shell-ext: { $text }
 migrate-done-from = migrated the old { $origin } install.
 migrate-done-nothing = migrated (nothing to move).
 migrate-failed = rclone-shell-ext: migrating the old install failed: { $error }
+
+## ---- Wave 3 work zones: each agent adds ids ONLY under its own zone (any prefix), so
+## ---- parallel branches merge cleanly. The zones are folded into the sections above afterwards.
+
+## zone: cosmic-details
+
+## end zone: cosmic-details
+
+## zone: cosmic-settings
+
+## end zone: cosmic-settings
+
+## zone: panel (health-, panel-, dolphin-, plasmoid)
+
+## end zone: panel
+
+## zone: kirigami (plasma/ui windows)
+
+## end zone: kirigami
+
+## zone: core-errors
+
+## end zone: core-errors
