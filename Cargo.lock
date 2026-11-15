@@ -4450,6 +4450,7 @@ dependencies = [
  "jiff",
  "rclone-plasma-ui",
  "rclone-ui-core",
+ "rclone-ui-view",
  "serde",
  "serde_json",
  "zbus",
@@ -4464,6 +4465,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "rclone-ui-core",
+ "rclone-ui-view",
  "serde",
  "serde_json",
 ]
@@ -4475,10 +4477,31 @@ dependencies = [
  "base64 0.22.1",
  "jiff",
  "mime_guess",
+ "rclone-ui-i18n",
  "serde",
  "serde_json",
  "ureq",
  "xdg-mime",
+]
+
+[[package]]
+name = "rclone-ui-i18n"
+version = "0.1.0"
+dependencies = [
+ "fluent-syntax",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "regex",
+ "rust-embed",
+]
+
+[[package]]
+name = "rclone-ui-view"
+version = "0.1.0"
+dependencies = [
+ "rclone-ui-core",
+ "rclone-ui-i18n",
+ "serde_json",
 ]
 
 [[package]]

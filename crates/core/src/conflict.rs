@@ -12,6 +12,7 @@
 //!
 //! Every step checks what's already done, so a failure part way is fixed by running it again.
 
+use rclone_ui_i18n::fl;
 use std::path::{Path, PathBuf};
 
 pub const P1: &str = "..path1";
@@ -26,7 +27,8 @@ pub trait Remote {
     fn delete(&self, path: &str) -> Result<(), String>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Winner {
     /// Both edits were byte-for-byte the same; nothing went into history.
     Same,
@@ -42,19 +44,20 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    pub fn notice(&self, pin: &str) -> String {
-        let name = format!("{pin}/{}", self.path);
-        match self.winner {
-            Winner::Same => format!("{name} was changed the same way on both sides"),
-            Winner::Local => format!(
-                "{name} was changed in two places; kept this computer's newer version (the other \
-                 is in the file's version history)"
-            ),
-            Winner::Remote => format!(
-                "{name} was changed in two places; kept the newer version from the cloud (this \
-                 computer's is in the file's version history)"
-            ),
+    pub fn notice(&self, pin: &str) -> crate::pin::NoticeText {
+        crate::pin::NoticeText::Conflict {
+            path: format!("{pin}/{}", self.path),
+            winner: self.winner,
         }
+    }
+}
+
+/// The notice wording for a conflict on `name` (pin and path), in the current language.
+pub fn notice_label(name: &str, winner: Winner) -> String {
+    match winner {
+        Winner::Same => fl!("offline-conflict-same", name = name),
+        Winner::Local => fl!("offline-conflict-local", name = name),
+        Winner::Remote => fl!("offline-conflict-remote", name = name),
     }
 }
 
@@ -334,7 +337,11 @@ mod tests {
         };
         assert!(r
             .notice("Work")
+            .label()
             .starts_with("Work/a.txt was changed in two places"));
-        assert!(r.notice("Work").contains("this computer's newer version"));
+        assert!(r
+            .notice("Work")
+            .label()
+            .contains("this computer's newer version"));
     }
 }

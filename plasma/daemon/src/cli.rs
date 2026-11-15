@@ -167,8 +167,8 @@ fn offline_cli(args: &[String]) -> Option<i32> {
                     "  {rel}: {}{}",
                     p.phase.label(),
                     p.error
-                        .as_deref()
-                        .map_or_else(String::new, |e| format!(" ({e})"))
+                        .as_ref()
+                        .map_or_else(String::new, |e| format!(" ({})", e.label()))
                 ),
                 None => println!("  {rel}: waiting for the keeper"),
             }

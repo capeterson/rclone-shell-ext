@@ -14,6 +14,7 @@
 use crate::config::{expand, Config};
 use crate::rc::{ChangeKind, Direction};
 use crate::share;
+use rclone_ui_i18n::fl;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -114,31 +115,29 @@ pub fn normalize(
     pins: &[String],
     fs: &str,
 ) -> Result<String, String> {
-    let rel = share::remote_path(&expand(mount), path)
-        .ok_or_else(|| "Only items inside the Drive folder can be kept offline".to_string())?;
+    let rel =
+        share::remote_path(&expand(mount), path).ok_or_else(|| fl!("offline-err-outside-drive"))?;
     if rel.is_empty() {
-        return Err("The whole Drive can't be kept offline; pick a folder inside it".into());
+        return Err(fl!("offline-err-whole-drive"));
     }
     if !is_dir {
-        return Err("Only folders can be kept offline".into());
+        return Err(fl!("offline-err-only-folders"));
     }
     if let Some(p) = covering_pin(pins, &rel) {
         return Err(if p == rel {
-            "Already kept offline".into()
+            fl!("offline-err-already")
         } else {
-            format!("Already kept offline as part of {p}")
+            fl!("offline-err-already-part", parent = p)
         });
     }
     if let Some(p) = pins.iter().find(|p| p.starts_with(&format!("{rel}/"))) {
-        return Err(format!(
-            "Contains {p}, which is already kept offline; remove that first"
-        ));
+        return Err(fl!("offline-err-contains", pin = p.as_str()));
     }
     // Folders are synced by Drive id, so only the remote's name and the local path count. (If the
     // id can't be looked up the keeper falls back to the path and checks again.)
     let session = session_name(&remote_by_id(fs, ""), &local_dir(&rel).to_string_lossy());
     if session.len() > SESSION_NAME_MAX {
-        return Err("The folder's path is too long for rclone bisync".into());
+        return Err(fl!("offline-err-path-too-long"));
     }
     Ok(rel)
 }
@@ -172,13 +171,13 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Phase::Downloading => "Downloading for offline use",
-            Phase::Ready => "Available offline",
-            Phase::Waiting => "Waiting to sync",
-            Phase::Attention => "Needs attention",
-            Phase::Removing => "Removing offline copy",
+            Phase::Downloading => fl!("offline-phase-downloading"),
+            Phase::Ready => fl!("offline-phase-ready"),
+            Phase::Waiting => fl!("offline-phase-waiting"),
+            Phase::Attention => fl!("offline-phase-attention"),
+            Phase::Removing => fl!("offline-phase-removing"),
         }
     }
 
@@ -206,7 +205,8 @@ pub struct PinState {
     pub last_attempt: i64,
     /// Failed attempts in a row.
     pub failures: u32,
-    pub error: Option<String>,
+    #[serde(deserialize_with = "de_pin_error")]
+    pub error: Option<PinError>,
     /// A sync is running right now.
     pub syncing: bool,
     /// The Google Drive id of the cloud folder this copy's bisync session is keyed on. Set after
@@ -240,27 +240,38 @@ pub fn local_usage(rel: &str) -> (u64, u64) {
 /// 12 files (3.0 MiB) so far" or "Syncing…". `usage` is from [`local_usage`], when measured.
 pub fn describe(p: Option<&PinState>, usage: Option<(u64, u64)>) -> String {
     let Some(p) = p else {
-        return "Waiting to start…".into();
+        return fl!("offline-describe-waiting-to-start");
     };
     let files = |(n, b): (u64, u64)| {
-        let s = if n == 1 { "" } else { "s" };
-        format!("{n} file{s} ({})", crate::status::human_bytes(b))
+        fl!(
+            "offline-files-size",
+            count = n,
+            size = crate::status::human_bytes(b)
+        )
     };
     let mut line = match (p.phase, p.syncing) {
         (Phase::Downloading, _) => match usage {
-            Some(u) if u.0 > 0 => format!("{} · {} so far", p.phase.label(), files(u)),
-            _ => p.phase.label().to_string(),
+            Some(u) if u.0 > 0 => fl!(
+                "offline-describe-so-far",
+                phase = p.phase.label(),
+                files = files(u)
+            ),
+            _ => p.phase.label(),
         },
-        (Phase::Ready | Phase::Waiting, true) => "Syncing…".to_string(),
+        (Phase::Ready | Phase::Waiting, true) => fl!("offline-syncing"),
         (Phase::Ready, false) => match usage {
-            Some(u) => format!("{} · {}", p.phase.label(), files(u)),
-            None => p.phase.label().to_string(),
+            Some(u) => fl!(
+                "offline-describe-phase-files",
+                phase = p.phase.label(),
+                files = files(u)
+            ),
+            None => p.phase.label(),
         },
-        (phase, _) => phase.label().to_string(),
+        (phase, _) => phase.label(),
     };
     // While a sync runs, the error is the last attempt's and may no longer apply.
-    if let Some(e) = p.error.as_deref().filter(|_| !p.syncing) {
-        line = format!("{line}: {e}");
+    if let Some(e) = p.error.as_ref().filter(|_| !p.syncing) {
+        line = fl!("offline-describe-error", line = line, error = e.label());
     }
     line
 }
@@ -271,7 +282,182 @@ pub fn describe(p: Option<&PinState>, usage: Option<(u64, u64)>) -> String {
 pub struct Notice {
     pub at: i64,
     pub rel: String,
-    pub text: String,
+    #[serde(deserialize_with = "de_notice_text")]
+    pub text: NoticeText,
+}
+
+/// What a [`Notice`] says, stored as a code plus its facts so the wording is chosen in the
+/// language of whoever reads it, not whoever wrote it (the keeper may run under another locale).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeText {
+    /// A sync conflict on `path` (relative to the mount root) was resolved.
+    Conflict {
+        path: String,
+        winner: crate::conflict::Winner,
+    },
+    /// Text that is not ours to translate, or written before notices were coded.
+    Other(String),
+}
+
+impl Default for NoticeText {
+    fn default() -> Self {
+        NoticeText::Other(String::new())
+    }
+}
+
+impl NoticeText {
+    /// The wording, in the current language.
+    pub fn label(&self) -> String {
+        match self {
+            NoticeText::Conflict { path, winner } => crate::conflict::notice_label(path, *winner),
+            NoticeText::Other(s) => s.clone(),
+        }
+    }
+}
+
+/// Builds a [`PinError`] that carries raw text.
+type MakeError = fn(String) -> PinError;
+
+/// Why a folder shows an error. Stored as a code (plus the raw rclone/OS text where there is
+/// one), never as localized wording; [`PinError::label`] words it when it is displayed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PinError {
+    /// The folder is gone from the Drive mount.
+    FolderMissing,
+    /// The cloud folder was deleted and recreated.
+    FolderReplaced,
+    /// One side is empty and syncing would empty the other.
+    OneSideEmpty,
+    /// The folder is gone from the cloud.
+    CloudFolderMissing,
+    /// bisync stopped for safety.
+    SyncStopped,
+    /// Couldn't mount the offline copy over its place.
+    MountInPlace { error: String },
+    /// Removing: no connection to upload the last changes.
+    WaitingToUpload,
+    /// Removing: uploading the last changes failed.
+    UploadLast { error: String },
+    /// Removing: files in the folder are open.
+    FilesOpen,
+    /// Removing: deleting the local copy failed.
+    DeleteLocal { error: String },
+    /// No network.
+    NoNetwork,
+    /// rclone's own text, or text written before errors were coded.
+    Other(String),
+}
+
+impl PinError {
+    /// The wording, in the current language.
+    pub fn label(&self) -> String {
+        match self {
+            PinError::FolderMissing => fl!("offline-err-mount-folder-missing"),
+            PinError::FolderReplaced => fl!("offline-err-folder-replaced"),
+            PinError::OneSideEmpty => fl!("offline-err-one-side-empty"),
+            PinError::CloudFolderMissing => fl!("offline-err-cloud-folder-missing"),
+            PinError::SyncStopped => fl!("offline-err-sync-stopped"),
+            PinError::MountInPlace { error } => {
+                fl!("offline-err-mount-in-place", error = error.as_str())
+            }
+            PinError::WaitingToUpload => fl!("offline-err-waiting-to-upload"),
+            PinError::UploadLast { error } => {
+                fl!("offline-err-upload-last", error = error.as_str())
+            }
+            PinError::FilesOpen => fl!("offline-err-files-open"),
+            PinError::DeleteLocal { error } => {
+                fl!("offline-err-delete-local", error = error.as_str())
+            }
+            PinError::NoNetwork => fl!("offline-err-no-network"),
+            PinError::Other(s) => s.clone(),
+        }
+    }
+
+    /// Read an `offline.json` value from before errors were coded: the English sentence the old
+    /// keeper wrote. Known sentences get their variant back; anything else stays raw text.
+    fn from_legacy(s: String) -> Self {
+        const EXACT: [(&str, PinError); 7] = [
+            (
+                "The folder wasn't found in the Drive mount (moved or deleted?)",
+                PinError::FolderMissing,
+            ),
+            (
+                "The folder in the cloud was deleted and recreated, so this offline copy no longer matches it. Repair merges both sides without deleting anything.",
+                PinError::FolderReplaced,
+            ),
+            (
+                "One side of the folder is empty, and syncing would empty the other side too. Repair brings the files back.",
+                PinError::OneSideEmpty,
+            ),
+            (
+                "The folder wasn't found in the cloud (moved or deleted?)",
+                PinError::CloudFolderMissing,
+            ),
+            (
+                "Sync stopped for safety (too many deletions, or an interrupted run). Repair merges both sides without deleting anything.",
+                PinError::SyncStopped,
+            ),
+            (
+                "Waiting for a connection to upload the last changes",
+                PinError::WaitingToUpload,
+            ),
+            ("Files in the folder are still open", PinError::FilesOpen),
+        ];
+        if let Some((_, v)) = EXACT.iter().find(|(text, _)| *text == s) {
+            return v.clone();
+        }
+        if s == "no network" {
+            return PinError::NoNetwork;
+        }
+        let prefixed: [(&str, MakeError); 3] = [
+            ("Couldn't mount the offline copy in place: ", |error| {
+                PinError::MountInPlace { error }
+            }),
+            ("Couldn't upload the last changes: ", |error| {
+                PinError::UploadLast { error }
+            }),
+            ("Couldn't delete the local copy: ", |error| {
+                PinError::DeleteLocal { error }
+            }),
+        ];
+        for (prefix, make) in prefixed {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                return make(rest.to_string());
+            }
+        }
+        PinError::Other(s)
+    }
+}
+
+/// Either the coded form or a bare string from an older `offline.json`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PinErrorWire {
+    Coded(PinError),
+    Legacy(String),
+}
+
+fn de_pin_error<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PinError>, D::Error> {
+    Ok(Option::<PinErrorWire>::deserialize(d)?.map(|w| match w {
+        PinErrorWire::Coded(e) => e,
+        PinErrorWire::Legacy(s) => PinError::from_legacy(s),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NoticeTextWire {
+    Coded(NoticeText),
+    Legacy(String),
+}
+
+fn de_notice_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<NoticeText, D::Error> {
+    Ok(match NoticeTextWire::deserialize(d)? {
+        NoticeTextWire::Coded(t) => t,
+        NoticeTextWire::Legacy(s) => NoticeText::Other(s),
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,7 +505,7 @@ impl OfflineState {
         self.pins.iter_mut().find(|p| p.rel == rel)
     }
 
-    pub fn notice(&mut self, at: i64, rel: &str, text: String) {
+    pub fn notice(&mut self, at: i64, rel: &str, text: NoticeText) {
         self.notices.push(Notice {
             at,
             rel: rel.to_string(),
@@ -353,12 +539,7 @@ impl OfflineState {
 
 /// One-line summary for the panel popup, e.g. "3 folders · all available offline".
 pub fn summary(pins: &[String], state: &OfflineState) -> String {
-    let n = pins.len();
-    let folders = if n == 1 {
-        "1 folder".to_string()
-    } else {
-        format!("{n} folders")
-    };
+    let folders = fl!("offline-folders-count", count = pins.len());
     let worst = pins
         .iter()
         .map(|r| state.pin(r).map_or(Phase::Downloading, |p| p.phase))
@@ -370,9 +551,19 @@ pub fn summary(pins: &[String], state: &OfflineState) -> String {
             Phase::Attention => 4,
         });
     match worst {
-        None => "No folders kept offline".into(),
-        Some(Phase::Ready) => format!("{folders} · all available offline"),
-        Some(p) => format!("{folders} · {}", p.label().to_lowercase()),
+        None => fl!("offline-summary-none"),
+        Some(Phase::Ready) => fl!("offline-summary-all-ready", folders = folders),
+        Some(p) => fl!(
+            "offline-summary-phase",
+            folders = folders,
+            phase = match p {
+                Phase::Downloading => "downloading",
+                Phase::Waiting => "waiting",
+                Phase::Attention => "attention",
+                Phase::Removing => "removing",
+                Phase::Ready => "ready",
+            }
+        ),
     }
 }
 
@@ -578,7 +769,7 @@ mod tests {
             last_sync: Some(5),
             ..PinState::default()
         });
-        s.notice(1, "Work", "hi".into());
+        s.notice(1, "Work", NoticeText::Other("hi".into()));
         s.save_to(&f).unwrap();
         assert_eq!(OfflineState::load_from(&f), s);
         std::fs::write(&f, "not json").unwrap();
@@ -590,10 +781,14 @@ mod tests {
     fn notices_are_capped() {
         let mut s = OfflineState::default();
         for i in 0..(NOTICES_KEPT + 5) {
-            s.notice(i64::try_from(i).unwrap(), "x", format!("{i}"));
+            s.notice(
+                i64::try_from(i).unwrap(),
+                "x",
+                NoticeText::Other(format!("{i}")),
+            );
         }
         assert_eq!(s.notices.len(), NOTICES_KEPT);
-        assert_eq!(s.notices[0].text, "5");
+        assert_eq!(s.notices[0].text, NoticeText::Other("5".into()));
     }
 
     #[test]
@@ -617,7 +812,7 @@ mod tests {
             "Available offline · 1 file (5.0 B)"
         );
         p.phase = Phase::Waiting;
-        p.error = Some("no network".into());
+        p.error = Some(PinError::NoNetwork);
         assert_eq!(describe(Some(&p), None), "Waiting to sync: no network");
     }
 
@@ -799,5 +994,81 @@ mod tests {
             plan(&[], &s, &w.facts(1, false)),
             [Step::Remove("gone".into())]
         );
+    }
+
+    #[test]
+    fn an_old_offline_json_with_english_errors_still_loads() {
+        let old = r#"{
+            "updated": 5,
+            "pins": [
+                {"rel": "A", "phase": "Attention",
+                 "error": "The folder wasn't found in the Drive mount (moved or deleted?)"},
+                {"rel": "B", "phase": "Removing", "error": "Couldn't upload the last changes: boom"},
+                {"rel": "C", "phase": "Waiting", "error": "no network"},
+                {"rel": "D", "phase": "Waiting", "error": "couldn't resolve host"},
+                {"rel": "E", "phase": "Ready"}
+            ],
+            "notices": [{"at": 1, "rel": "A", "text": "A/x was changed in two places"}]
+        }"#;
+        let s: OfflineState = serde_json::from_str(old).unwrap();
+        let err = |rel: &str| s.pin(rel).unwrap().error.clone();
+        assert_eq!(err("A"), Some(PinError::FolderMissing));
+        assert_eq!(
+            err("B"),
+            Some(PinError::UploadLast {
+                error: "boom".into()
+            })
+        );
+        assert_eq!(err("C"), Some(PinError::NoNetwork));
+        assert_eq!(
+            err("D"),
+            Some(PinError::Other("couldn't resolve host".into()))
+        );
+        assert_eq!(err("E"), None);
+        assert_eq!(
+            s.notices[0].text,
+            NoticeText::Other("A/x was changed in two places".into())
+        );
+        // Displayed wording is unchanged.
+        assert_eq!(
+            PinError::FolderMissing.label(),
+            "The folder wasn't found in the Drive mount (moved or deleted?)"
+        );
+    }
+
+    #[test]
+    fn errors_and_notices_are_stored_as_codes() {
+        let mut s = OfflineState::default();
+        s.pins.push(PinState {
+            rel: "A".into(),
+            error: Some(PinError::MountInPlace { error: "x".into() }),
+            ..PinState::default()
+        });
+        s.notice(
+            1,
+            "A",
+            NoticeText::Conflict {
+                path: "A/f".into(),
+                winner: crate::conflict::Winner::Local,
+            },
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("mount_in_place"), "{json}");
+        assert!(!json.contains("Couldn't"), "{json}");
+        assert!(!json.contains("two places"), "{json}");
+        let back: OfflineState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn summary_names_the_worst_phase() {
+        let pins = vec!["A".to_string()];
+        let mut st = OfflineState::default();
+        st.pins.push(PinState {
+            rel: "A".into(),
+            phase: Phase::Attention,
+            ..PinState::default()
+        });
+        assert_eq!(summary(&pins, &st), "1 folder · needs attention");
     }
 }

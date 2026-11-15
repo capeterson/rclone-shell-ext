@@ -8,6 +8,7 @@
 //! needed once, with root. The Drive mount then keeps everyone else out through file
 //! permissions (see `units.rs`).
 
+use rclone_ui_i18n::fl;
 use std::process::Command;
 
 pub const PATH: &str = "/etc/fuse.conf";
@@ -59,16 +60,26 @@ fn run_script(prefix: Option<&str>, path: &str) -> Result<Option<String>, String
         .args(["-c", &enable_script(), "sh", path])
         .stderr(std::process::Stdio::inherit())
         .output()
-        .map_err(|e| format!("Couldn't run {}: {e}", prefix.unwrap_or("sh")))?;
+        .map_err(|e| {
+            fl!(
+                "offline-err-fuse-run",
+                program = prefix.unwrap_or("sh"),
+                error = e.to_string()
+            )
+        })?;
     let backup = String::from_utf8_lossy(&out.stdout).trim().to_string();
     match out.status.code() {
         Some(0) => Ok((!backup.is_empty()).then_some(backup)),
         // pkexec: 126 = the user dismissed the dialog or wasn't authorized, 127 = no agent.
-        Some(126) if prefix.is_some() => Err("Permission was not granted".into()),
-        Some(127) if prefix.is_some() => Err("No authentication agent is available".into()),
-        Some(3) => Err(format!("Couldn't back up {path}, so it was left unchanged")),
-        Some(4) => Err(format!("Couldn't write {path}")),
-        _ => Err(format!("Updating {path} failed ({})", out.status)),
+        Some(126) if prefix.is_some() => Err(fl!("offline-err-fuse-denied")),
+        Some(127) if prefix.is_some() => Err(fl!("offline-err-fuse-no-agent")),
+        Some(3) => Err(fl!("offline-err-fuse-backup", path = path)),
+        Some(4) => Err(fl!("offline-err-fuse-write", path = path)),
+        _ => Err(fl!(
+            "offline-err-fuse-failed",
+            path = path,
+            status = out.status.to_string()
+        )),
     }
 }
 

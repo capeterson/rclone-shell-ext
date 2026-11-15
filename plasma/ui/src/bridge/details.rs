@@ -4,8 +4,6 @@
 //! landed and for at least [`MIN_LOADING`]. After that the transfer counts and pin state refresh
 //! every [`REFRESH`].
 
-use crate::logic::details::{offline_snapshot, parent_dir, DetailsState, DetailsView};
-use crate::logic::{remaining_loading, REFRESH};
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::{QString, QStringList};
@@ -13,6 +11,8 @@ use rclone_ui_core::config;
 use rclone_ui_core::keeper;
 use rclone_ui_core::share;
 use rclone_ui_core::status;
+use rclone_ui_view::details::{offline_snapshot, parent_dir, DetailsState, DetailsView};
+use rclone_ui_view::{remaining_loading, REFRESH};
 use std::sync::Mutex;
 use std::time::Instant;
 

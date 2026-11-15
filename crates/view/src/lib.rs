@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Toolkit-free logic behind the two windows: what to show and which buttons apply. Everything
+//! Toolkit-free presentation model behind the windows and panels: what to show and which buttons apply. Everything
 //! here is plain Rust so it can be unit tested without a Qt event loop.
 
 pub mod details;
+pub mod history;
 pub mod settings;
 
+use rclone_ui_i18n::fl;
 use std::time::Duration;
 
 /// A value that is on its way, arrived, or failed.
@@ -50,12 +52,12 @@ pub fn remaining_loading(elapsed: Duration) -> Duration {
 /// "5 minutes ago" style text for a Unix timestamp, relative to `now` (both in seconds).
 pub fn ago(now: i64, then: i64) -> String {
     let secs = (now - then).max(0);
-    let plural = |n: i64, unit: &str| format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
+    let (minutes, hours, days): (i64, i64, i64) = (secs / 60, secs / 3600, secs / 86400);
     match secs {
-        0..=59 => "just now".to_string(),
-        60..=3599 => plural(secs / 60, "minute"),
-        3600..=86399 => plural(secs / 3600, "hour"),
-        _ => plural(secs / 86400, "day"),
+        0..=59 => fl!("common-ago-now"),
+        60..=3599 => fl!("common-ago-minutes", count = minutes),
+        3600..=86399 => fl!("common-ago-hours", count = hours),
+        _ => fl!("common-ago-days", count = days),
     }
 }
 
