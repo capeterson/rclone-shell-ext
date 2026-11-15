@@ -84,7 +84,7 @@ QList<QAction *> RcloneFileItemAction::actions(const KFileItemListProperties &fi
         paths << path;
     }
 
-    auto *menuAction = new QAction(QIcon::fromTheme(QStringLiteral("rclone-plasma")), i18n("rclone"), parentWidget);
+    auto *menuAction = new QAction(QIcon::fromTheme(QStringLiteral("com.ca-peterson.rclone-shell-ext")), i18n("rclone"), parentWidget);
     auto *menu = new QMenu(parentWidget);
     menuAction->setMenu(menu);
 

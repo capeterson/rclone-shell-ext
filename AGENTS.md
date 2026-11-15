@@ -23,6 +23,11 @@ Every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`. No literals i
 - Kirigami windows: `Strings.t("id")`. Plasmoid: `s["id"]` (from the daemon's `Strings()`).
   Dolphin C++: `DaemonClient::text("id")`.
 - Anything with arguments or plurals is formatted in Rust and handed over finished.
+- Persisted state (offline.json, config, history) and IPC payloads carry codes and enums, never
+  translated text: translate at display time (`PinError::label()`, not a stored `fl!` result).
+  The keeper runs under systemd, possibly in another locale than the UI.
+- Never change case or concatenate translated fragments in code (`to_lowercase()`, `a + " " + b`);
+  use one message with a Fluent selector or arguments so translators control the sentence.
 - Ids are kebab-case with a surface prefix (`health-`, `panel-`, `details-`, `settings-`,
   `offline-`, `share-`, `drive-`, `cli-`, `common-`; `cosmic-`/`plasma-`/`dolphin-` only for
   shell-only controls). Reuse an existing message before adding one; change wording in one place.

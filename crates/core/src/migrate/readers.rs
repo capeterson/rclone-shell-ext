@@ -3,6 +3,7 @@
 //! value per file) and the Plasma front end's `KConfig` INI file.
 
 use crate::config::Config;
+use rclone_ui_i18n::fl;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -24,8 +25,13 @@ pub fn read_cosmic(dir: &Path) -> Result<Option<(Config, Option<SystemTime>)>, S
             let file = dir.join(stringify!($name));
             match std::fs::read_to_string(&file) {
                 Ok(text) => {
-                    cfg.$name = ron::from_str(&text)
-                        .map_err(|e| format!("{}: not a valid setting ({e})", file.display()))?;
+                    cfg.$name = ron::from_str(&text).map_err(|e| {
+                        fl!(
+                            "migrate-error-setting",
+                            path = file.display().to_string(),
+                            error = e.to_string()
+                        )
+                    })?;
                     let mtime = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
                     newest = newest.max(mtime);
                 }

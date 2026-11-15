@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `SettingsModel`: the `QObject` behind `Settings.qml`. The offline-folders toggle flow lives in
-//! [`crate::logic::settings`]; this file runs its worker steps on threads (the setup includes the
+//! [`rclone_ui_view::settings`]; this file runs its worker steps on threads (the setup includes the
 //! system password prompt) and mirrors the state into properties. Refreshes every [`REFRESH`].
 
-use crate::logic::settings::{ConsentAction, SettingsState, SettingsView, ToggleAction};
-use crate::logic::REFRESH;
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -12,6 +10,8 @@ use rclone_ui_core::config::{self, Config};
 use rclone_ui_core::offline_setup::{set_up, tear_down, turn_on, Checks};
 use rclone_ui_core::pin::{self, OfflineState};
 use rclone_ui_core::{keeper, share};
+use rclone_ui_view::settings::{ConsentAction, SettingsState, SettingsView, ToggleAction};
+use rclone_ui_view::REFRESH;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cxx_qt::bridge]

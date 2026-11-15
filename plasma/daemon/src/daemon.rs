@@ -5,13 +5,13 @@
 //! history debounce, property updates, cache invalidation) and the emblem worker (answers
 //! `FileStates` cache misses in the background). The bus is served by zbus's own thread.
 
-use crate::debounce::History;
 use crate::emblems::{self, EmblemCache, Outcome};
 use crate::recheck::{self, FolderThrottle, SettleQueue};
 use crate::{setconfig, snapshot};
 use rclone_ui_core::config::{expand, store, Config};
 use rclone_ui_core::pin::OfflineState;
 use rclone_ui_core::rc::{self, CompletedTransfer};
+use rclone_ui_view::history::History;
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};

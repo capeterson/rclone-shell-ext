@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli", "cosmic", "plasma/daemon", "plasma/ui"]
-default-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/i18n", "crates/view", "crates/cli", "cosmic", "plasma/daemon", "plasma/ui"]
+default-members = ["crates/core", "crates/i18n", "crates/view", "crates/cli"]
 
 [workspace.package]
 edition = "2021"
@@ -11,6 +11,8 @@ version = "0.1.0"
 [workspace.dependencies]
 rclone-ui-core = { path = "crates/core" }
 rclone-shell-ext = { path = "crates/cli" }
+rclone-ui-i18n = { path = "crates/i18n" }
+rclone-ui-view = { path = "crates/view" }
 jiff = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

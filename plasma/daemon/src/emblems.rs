@@ -24,13 +24,13 @@ pub enum PinMark {
 
 pub fn sync_emblem(s: SyncState) -> &'static str {
     match s {
-        SyncState::InSync => "rclone-plasma-emblem-synced",
-        SyncState::OnlineOnly => "rclone-plasma-emblem-online",
-        SyncState::PartlyCached => "rclone-plasma-emblem-partial",
+        SyncState::InSync => "rclone-shell-ext-emblem-synced",
+        SyncState::OnlineOnly => "rclone-shell-ext-emblem-online",
+        SyncState::PartlyCached => "rclone-shell-ext-emblem-partial",
         SyncState::Uploading | SyncState::QueuedUpload | SyncState::LocalNewer => {
-            "rclone-plasma-emblem-uploading"
+            "rclone-shell-ext-emblem-uploading"
         }
-        SyncState::Downloading | SyncState::DriveNewer => "rclone-plasma-emblem-downloading",
+        SyncState::Downloading | SyncState::DriveNewer => "rclone-shell-ext-emblem-downloading",
         SyncState::Differs => "emblem-warning",
     }
 }
@@ -42,7 +42,7 @@ pub fn emblem_list(sync: Option<SyncState>, pin: PinMark) -> Vec<String> {
         .collect();
     match pin {
         PinMark::None => {}
-        PinMark::Offline => v.push("rclone-plasma-emblem-offline".into()),
+        PinMark::Offline => v.push("rclone-shell-ext-emblem-offline".into()),
         PinMark::Attention => v.push("emblem-error".into()),
     }
     v
@@ -334,14 +334,14 @@ mod tests {
     fn maps_every_sync_state() {
         use SyncState::*;
         let want = [
-            (InSync, "rclone-plasma-emblem-synced"),
-            (OnlineOnly, "rclone-plasma-emblem-online"),
-            (PartlyCached, "rclone-plasma-emblem-partial"),
-            (Uploading, "rclone-plasma-emblem-uploading"),
-            (QueuedUpload, "rclone-plasma-emblem-uploading"),
-            (LocalNewer, "rclone-plasma-emblem-uploading"),
-            (Downloading, "rclone-plasma-emblem-downloading"),
-            (DriveNewer, "rclone-plasma-emblem-downloading"),
+            (InSync, "rclone-shell-ext-emblem-synced"),
+            (OnlineOnly, "rclone-shell-ext-emblem-online"),
+            (PartlyCached, "rclone-shell-ext-emblem-partial"),
+            (Uploading, "rclone-shell-ext-emblem-uploading"),
+            (QueuedUpload, "rclone-shell-ext-emblem-uploading"),
+            (LocalNewer, "rclone-shell-ext-emblem-uploading"),
+            (Downloading, "rclone-shell-ext-emblem-downloading"),
+            (DriveNewer, "rclone-shell-ext-emblem-downloading"),
             (Differs, "emblem-warning"),
         ];
         for (s, e) in want {
@@ -350,8 +350,8 @@ mod tests {
         assert_eq!(
             emblem_list(Some(InSync), PinMark::Offline),
             [
-                "rclone-plasma-emblem-synced",
-                "rclone-plasma-emblem-offline"
+                "rclone-shell-ext-emblem-synced",
+                "rclone-shell-ext-emblem-offline"
             ]
         );
         assert_eq!(emblem_list(None, PinMark::Attention), ["emblem-error"]);

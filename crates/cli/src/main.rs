@@ -13,6 +13,6 @@ fn main() {
     if let Some(code) = rclone_shell_ext_cli::run(&args) {
         std::process::exit(code);
     }
-    eprintln!("{}", rclone_shell_ext_cli::USAGE);
+    eprintln!("{}", rclone_shell_ext_cli::usage());
     std::process::exit(2);
 }

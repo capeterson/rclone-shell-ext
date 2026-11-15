@@ -436,7 +436,7 @@ impl Menu {
                 transferring,
                 cached,
             } => match status::file_state(*transferring, cached.as_ref(), self.drive.ok()) {
-                Some(s) => (s.icon(), s.label().into(), String::new()),
+                Some(s) => (s.icon(), s.label(), String::new()),
                 None if self.drive.err().is_some() => (
                     "dialog-warning-symbolic",
                     "Cached (can't compare with Drive)".into(),

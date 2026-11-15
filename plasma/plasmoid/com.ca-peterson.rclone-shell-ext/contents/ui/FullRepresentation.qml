@@ -65,7 +65,7 @@ PlasmaExtras.Representation {
         contentItem: RowLayout {
             spacing: Kirigami.Units.smallSpacing
             Kirigami.Icon {
-                source: full.host ? full.host.iconName : "rclone-plasma-loading"
+                source: full.host ? full.host.iconName : "rclone-shell-ext-loading"
                 implicitWidth: Kirigami.Units.iconSizes.medium
                 implicitHeight: Kirigami.Units.iconSizes.medium
             }
@@ -89,7 +89,7 @@ PlasmaExtras.Representation {
             anchors.centerIn: parent
             width: parent.width - Kirigami.Units.gridUnit * 4
             visible: !full.available
-            iconName: "rclone-plasma-loading"
+            iconName: "rclone-shell-ext-loading"
             text: i18n("rclone UI service not running")
         }
 

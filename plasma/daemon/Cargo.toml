@@ -9,6 +9,8 @@ version.workspace = true
 rclone-ui-core.workspace = true
 rclone-shell-ext-plasma-ui = { path = "../ui" }
 rclone-shell-ext.workspace = true
+rclone-ui-i18n.workspace = true
+rclone-ui-view.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jiff.workspace = true

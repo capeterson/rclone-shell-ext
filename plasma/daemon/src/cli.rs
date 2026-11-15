@@ -4,6 +4,7 @@
 
 use crate::{daemon, snapshot};
 use rclone_ui_core::config::store;
+use rclone_ui_i18n::fl;
 
 /// The value after `flag`, if present.
 fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -38,13 +39,9 @@ pub fn run(args: &[String]) -> Option<i32> {
 
 pub fn usage() {
     eprintln!(
-        "usage: rclone-shell-ext-plasma MODE\n\
-         \x20 --daemon                 run the D-Bus service\n\
-         \x20 --status --json [--rc-addr HOST:PORT]\n\
-         \x20 --menu PATH...           details window (also --details)\n\
-         \x20 --settings               settings window\n\
-         plus the shared modes of `rclone-shell-ext`:\n{}",
-        rclone_shell_ext_cli::USAGE
+        "{}\n{}",
+        fl!("cli-usage-plasma"),
+        rclone_shell_ext_cli::usage()
     );
 }
 

@@ -59,7 +59,7 @@ Kirigami.ApplicationWindow {
                     anchors.centerIn: parent
                     width: Kirigami.Units.iconSizes.large
                     height: width
-                    source: "rclone-plasma"
+                    source: "com.ca-peterson.rclone-shell-ext"
                     fallback: "folder-cloud"
                 }
             }

@@ -18,7 +18,7 @@ This is a monorepo (work in progress, see `docs/architecture.md`):
 - `crates/cli`: the shared `rclone-shell-ext` binary (offline-folder keeper, pins, status, sharing, migration).
 - `cosmic/`: the COSMIC panel applet (`rclone-shell-ext-cosmic`).
 - `plasma/`: the KDE Plasma front end (`daemon/`, `ui/`, `plasmoid/`, `dolphin/`).
-- `resources/`: shared SVG assets.
+- `resources/`: the only copy of the SVG assets (`emblems/` status icons, `overlay/` Dolphin emblems, `icons/` app icons, `loading/`).
 
 Run `just --list` for the build, test and install recipes (`just cosmic::...`, `just plasma::...`).
 

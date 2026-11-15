@@ -21,4 +21,4 @@ Requires Qt 6, KF6 (KIO, CoreAddons, I18n) and extra-cmake-modules, e.g. on Fedo
 
 Plugins install to `<prefix>/lib64/qt6/plugins/kf6/{overlayicon,kfileitemaction}`.
 Restart Dolphin (`kquitapp6 dolphin`) afterwards. The `rclone-shell-ext-plasma` binary must
-be on `PATH`, and the icons `rclone-plasma` and `rclone-plasma-emblem-*` installed.
+be on `PATH`, and the icons `com.ca-peterson.rclone-shell-ext` and `rclone-shell-ext-emblem-*` installed.

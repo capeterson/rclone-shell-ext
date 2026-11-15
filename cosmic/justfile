@@ -2,13 +2,14 @@ name := 'rclone-shell-ext-cosmic'
 # The shared binary: the keeper and pin units run it, and both front ends install it.
 shared := 'rclone-shell-ext'
 appid := 'com.ca-peterson.rclone-shell-ext.Cosmic'
-# The applet's icon file is still named after the old id until the icon rename lands.
-iconid := 'com.ca-peterson.CosmicRcloneUi'
 # What earlier releases were called (uninstall cleans these up too).
 oldname := 'cosmic-rclone-ui'
 oldappid := 'com.ca-peterson.CosmicRcloneUi'
 # Recipes run in this directory; the workspace target dir is one level up.
 target := '../target'
+# The one copy of the SVGs lives at the repo root.
+icon := 'com.ca-peterson.rclone-shell-ext-symbolic'
+old_icon := 'com.ca-peterson.CosmicRcloneUi-symbolic'
 
 default: build-release
 
@@ -35,14 +36,14 @@ install-user: build-release
     install -Dm0755 {{target}}/release/{{name}} ~/.local/bin/{{name}}
     install -Dm0755 {{target}}/release/{{shared}} ~/.local/bin/{{shared}}
     install -Dm0644 resources/{{appid}}.desktop ~/.local/share/applications/{{appid}}.desktop
-    install -Dm0644 resources/icons/hicolor/scalable/apps/{{iconid}}-symbolic.svg ~/.local/share/icons/hicolor/scalable/apps/{{iconid}}-symbolic.svg
+    install -Dm0644 ../resources/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg
 
 # Removes this version's files and the ones earlier versions (cosmic-rclone-ui) installed. The
 # offline-folder units go first; the shared binary stays while the Plasma front end needs it.
 uninstall-user:
     if [ -x ~/.local/bin/{{shared}} ]; then ~/.local/bin/{{shared}} --offline-remove; fi
     if [ -x ~/.local/bin/{{oldname}} ]; then ~/.local/bin/{{oldname}} --offline-remove; fi
-    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{iconid}}-symbolic.svg
+    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{old_icon}}.svg
     if [ ! -e ~/.local/bin/rclone-shell-ext-plasma ]; then rm -f ~/.local/bin/{{shared}}; fi
     rm -f ~/.local/bin/{{oldname}} ~/.local/share/applications/{{oldappid}}.desktop
 

@@ -6,6 +6,7 @@
 
 use rclone_ui_core::config::store;
 use rclone_ui_core::{keeper, migrate, pin, rc, share, units};
+use rclone_ui_i18n::fl;
 
 /// The value after `flag`, if present.
 fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -38,13 +39,10 @@ pub fn startup(args: &[String]) {
 }
 
 /// What the `rclone-shell-ext` binary prints when it is given no mode.
-pub const USAGE: &str = "usage: rclone-shell-ext MODE\n\
-    \x20 --status [--rc-addr HOST:PORT]\n\
-    \x20 --share-url PATH | --share-open PATH\n\
-    \x20 --pin PATH | --unpin PATH | --pins\n\
-    \x20 --offline-repair FOLDER | --offline-remove\n\
-    \x20 --offline-keeper | --pin-mount ID | --pin-unmount ID   (run by the systemd units)\n\
-    \x20 --migrate [--dry-run]    move an old cosmic-rclone-ui / rclone-plasma install over";
+#[must_use]
+pub fn usage() -> String {
+    fl!("cli-usage")
+}
 
 /// Run the mode the arguments ask for. `None` means none of the shared modes matched.
 #[must_use]
@@ -95,8 +93,11 @@ fn status_cmd(args: &[String]) {
     }
     let mut st = rc::fetch(&cfg);
     let recent = std::mem::take(&mut st.recent);
-    println!("{st:#?}\nhealth: {:?}", st.health());
-    println!("recent: {} entries", recent.len());
+    println!(
+        "{st:#?}\n{}",
+        fl!("cli-status-health", health = format!("{:?}", st.health()))
+    );
+    println!("{}", fl!("cli-status-recent", count = recent.len()));
     for t in recent.iter().take(10) {
         println!("  {t:?}");
     }
@@ -133,19 +134,19 @@ fn offline_cli(args: &[String]) -> Option<i32> {
     // `--pin PATH` / `--unpin PATH` keep a folder offline or stop doing so.
     if let Some(p) = arg(args, "--pin") {
         return Some(report(
-            keeper::set_pinned(p, true).map(|r| format!("Keeping {r} available offline")),
+            keeper::set_pinned(p, true).map(|r| fl!("cli-pin-keeping", folder = r)),
         ));
     }
     if let Some(p) = arg(args, "--unpin") {
         return Some(report(
-            keeper::set_pinned(p, false).map(|r| format!("No longer keeping {r} offline")),
+            keeper::set_pinned(p, false).map(|r| fl!("cli-pin-stopped", folder = r)),
         ));
     }
     // `--offline-repair FOLDER` asks the keeper to rebuild a folder's sync baseline.
     if let Some(rel) = arg(args, "--offline-repair") {
         return Some(report(
             keeper::request_repair(rel)
-                .map(|()| format!("Repair of {rel} requested"))
+                .map(|()| fl!("cli-repair-requested", folder = rel))
                 .map_err(|e| e.to_string()),
         ));
     }
@@ -154,33 +155,51 @@ fn offline_cli(args: &[String]) -> Option<i32> {
     if has(args, "--offline-remove") {
         let cfg = store().load();
         if !cfg.pins.is_empty() {
-            return Some(report(Err(format!(
-                "{} folder(s) are still kept offline; remove them in Settings first",
-                cfg.pins.len()
+            return Some(report(Err(fl!(
+                "cli-offline-still-pinned",
+                count = cfg.pins.len()
             ))));
         }
         return Some(report(
             units::remove(&cfg)
                 .and_then(|()| store().save(&mut |c| c.offline_enabled = false).map(|_| ()))
-                .map(|()| "Offline folder services removed".into()),
+                .map(|()| fl!("cli-offline-removed")),
         ));
     }
     // `--pins` lists offline folders and their state.
     if has(args, "--pins") {
         let cfg = store().load();
         let state = pin::OfflineState::load();
-        let on = if cfg.offline_enabled { "on" } else { "off" };
-        println!("offline folders: {on}");
+        println!(
+            "{}",
+            if cfg.offline_enabled {
+                fl!("cli-pins-header-on")
+            } else {
+                fl!("cli-pins-header-off")
+            }
+        );
         for rel in &cfg.pins {
             match state.pin(rel) {
-                Some(p) => println!(
-                    "  {rel}: {}{}",
-                    p.phase.label(),
-                    p.error
-                        .as_deref()
-                        .map_or_else(String::new, |e| format!(" ({e})"))
-                ),
-                None => println!("  {rel}: waiting for the keeper"),
+                Some(p) => match &p.error {
+                    Some(e) => println!(
+                        "  {}",
+                        fl!(
+                            "cli-pin-line-error",
+                            folder = rel.as_str(),
+                            phase = p.phase.label(),
+                            error = e.label()
+                        )
+                    ),
+                    None => println!(
+                        "  {}",
+                        fl!(
+                            "cli-pin-line",
+                            folder = rel.as_str(),
+                            phase = p.phase.label()
+                        )
+                    ),
+                },
+                None => println!("  {}", fl!("cli-pin-waiting", folder = rel.as_str())),
             }
         }
         return Some(0);

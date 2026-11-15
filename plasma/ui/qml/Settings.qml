@@ -189,7 +189,7 @@ Kirigami.ApplicationWindow {
             }
             FormCard.FormTextDelegate {
                 text: "Sync status in Dolphin"
-                description: "Dolphin's plugins show sync emblems on files in the Drive folder and add an “rclone” action for details, offline folders and sharing. They talk to the rclone-plasma background service over D-Bus."
+                description: "Dolphin's plugins show sync emblems on files in the Drive folder and add an “rclone” action for details, offline folders and sharing. They talk to the rclone-shell-ext-plasma background service over D-Bus."
             }
         }
 

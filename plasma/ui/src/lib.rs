@@ -5,7 +5,6 @@
 //! event loop and returns an exit code.
 
 mod bridge;
-pub mod logic;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 
@@ -47,10 +46,10 @@ fn run_qml(file: &str, display_name: &str) -> i32 {
         .set_application_name(&QString::from("rclone-shell-ext"));
     app.as_mut()
         .set_application_display_name(&QString::from(display_name));
-    // Plasma matches the window to its launcher (and takes the `rclone-plasma` icon) through
+    // Plasma matches the window to its launcher (and takes the `com.ca-peterson.rclone-shell-ext` icon) through
     // the desktop file name.
     QGuiApplication::set_desktop_file_name(&QString::from(APP_ID));
-    // TODO: cxx-qt-lib has no QIcon, so the window icon (`rclone-plasma`) is not set
+    // TODO: cxx-qt-lib has no QIcon, so the window icon (`com.ca-peterson.rclone-shell-ext`) is not set
     // explicitly; it comes from the installed desktop file / icon theme.
 
     let mut engine = QQmlApplicationEngine::new();

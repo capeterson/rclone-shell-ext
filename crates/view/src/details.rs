@@ -3,13 +3,14 @@
 //! COSMIC window's view logic with the widgets taken out: [`DetailsState`] holds what has
 //! arrived, [`DetailsState::view`] turns it into plain strings for the QML side.
 
-use super::Load;
+use crate::Load;
 use rclone_ui_core::config::{self, expand, Config};
 use rclone_ui_core::drive::{self, DriveInfo, Kind, Permission};
 use rclone_ui_core::mime_icon;
 use rclone_ui_core::pin::{self, OfflineState, Phase};
 use rclone_ui_core::share::{self, Target};
 use rclone_ui_core::status::{self, human_bytes, Local, SyncState};
+use rclone_ui_i18n::fl;
 use serde_json::json;
 use std::path::Path;
 
@@ -205,14 +206,18 @@ impl DetailsState {
             return ("dialog-warning-symbolic", e.to_string(), String::new());
         }
         if let Some(e) = self.local.err() {
-            return ("dialog-error-symbolic", "Error".into(), e.to_string());
+            return (
+                "dialog-error-symbolic",
+                fl!("details-status-error"),
+                e.to_string(),
+            );
         }
         // An offline folder is downloaded and synced by the keeper (a bisync job that writes
         // straight into the local copy), which the mount's own transfer counts never see.
         if let Some(status) = self.offline_status() {
             return status;
         }
-        let checking = (LOADING, "Checking…".to_string(), String::new());
+        let checking = (LOADING, fl!("details-status-checking"), String::new());
         let Some(local) = self.local.ok() else {
             return checking;
         };
@@ -221,27 +226,31 @@ impl DetailsState {
                 transferring,
                 cached,
             } => match status::file_state(*transferring, cached.as_ref(), self.drive.ok()) {
-                Some(s) => (s.icon(), s.label().into(), String::new()),
+                Some(s) => (s.icon(), s.label(), String::new()),
                 None if self.drive.err().is_some() => (
                     "dialog-warning-symbolic",
-                    "Cached (can't compare with Drive)".into(),
+                    fl!("details-status-cached-no-compare"),
                     String::new(),
                 ),
                 None => checking,
             },
             Local::Folder(f) => {
-                let more = if f.truncated { " or more" } else { "" };
                 if f.uploading + f.downloading > 0 {
-                    let n = f.uploading + f.downloading;
+                    let count = f.uploading + f.downloading;
+                    let detail = if f.truncated {
+                        fl!("details-files-pending-more", count = count)
+                    } else {
+                        fl!("details-files-pending", count = count)
+                    };
                     (
                         SyncState::LocalNewer.icon(),
-                        "Transferring".into(),
-                        format!("{n}{more} file(s)"),
+                        fl!("details-status-transferring"),
+                        detail,
                     )
                 } else {
                     (
                         SyncState::InSync.icon(),
-                        "Nothing pending".into(),
+                        fl!("details-status-nothing-pending"),
                         String::new(),
                     )
                 }
@@ -257,36 +266,36 @@ impl DetailsState {
         let rel = self.remote_rel()?;
         let p = self.offline.pin(pin::covering_pin(&self.cfg.pins, &rel)?)?;
         let so_far = || match self.offline_usage {
-            Some((n, b)) if n > 0 => format!("{n} file(s), {} so far", human_bytes(b)),
+            Some((n, b)) if n > 0 => {
+                fl!("details-offline-so-far", count = n, size = human_bytes(b))
+            }
             _ => String::new(),
         };
         let loading = "content-loading-symbolic";
         match (p.phase, p.syncing) {
             (Phase::Downloading, _) => Some((
                 SyncState::Downloading.icon(),
-                "Downloading for offline use".into(),
+                Phase::Downloading.label(),
                 so_far(),
             )),
-            (Phase::Removing, _) => Some((loading, "Removing offline copy".into(), String::new())),
+            (Phase::Removing, _) => Some((loading, Phase::Removing.label(), String::new())),
             (Phase::Attention, _) => Some((
                 "dialog-warning-symbolic",
-                "Offline sync needs attention".into(),
+                fl!("details-offline-needs-attention"),
                 String::new(),
             )),
             (Phase::Ready | Phase::Waiting, true) => Some((
                 SyncState::LocalNewer.icon(),
-                "Syncing offline copy".into(),
+                fl!("details-offline-syncing"),
                 String::new(),
             )),
-            (Phase::Waiting, false) => Some((
-                loading,
-                "Waiting to sync offline copy".into(),
-                String::new(),
-            )),
+            (Phase::Waiting, false) => {
+                Some((loading, fl!("details-offline-waiting"), String::new()))
+            }
             // A file inside an idle offline folder: not in the mount's cache, but here.
             (Phase::Ready, false) if !self.is_dir => Some((
                 SyncState::InSync.icon(),
-                "Available offline".into(),
+                Phase::Ready.label(),
                 String::new(),
             )),
             (Phase::Ready, false) => None,
@@ -301,12 +310,12 @@ impl DetailsState {
         let rel = self.remote_rel()?;
         (pin::covering_pin(&self.cfg.pins, &rel)? == rel).then_some(())?;
         let (n, b) = self.offline_usage?;
-        Some(format!("{n} file(s), {}", human_bytes(b)))
+        Some(fl!("details-files-size", count = n, size = human_bytes(b)))
     }
 
     /// The label/value pairs under the status line, with placeholders while loading: four for a
     /// file, three for a folder.
-    pub fn detail_rows(&self) -> Vec<(&'static str, String)> {
+    pub fn detail_rows(&self) -> Vec<(String, String)> {
         let from_drive = |f: &dyn Fn(&DriveInfo) -> Option<String>| match &self.drive {
             Load::Pending => PLACEHOLDER.to_string(),
             Load::Done(Ok(d)) => f(d).unwrap_or_else(|| NONE.into()),
@@ -319,20 +328,33 @@ impl DetailsState {
                 _ => NONE.to_string(),
             };
             return vec![
-                ("Uploading", from_local(&|s| s.uploading.to_string())),
-                ("Downloading", from_local(&|s| s.downloading.to_string())),
+                (
+                    fl!("details-row-uploading"),
+                    from_local(&|s| s.uploading.to_string()),
+                ),
+                (
+                    fl!("details-row-downloading"),
+                    from_local(&|s| s.downloading.to_string()),
+                ),
                 // An offline folder's files live in its local copy, not in the mount's cache.
                 match self.offline_copy() {
-                    Some(copy) => ("Offline copy", copy),
+                    Some(copy) => (fl!("details-row-offline-copy"), copy),
                     None => (
-                        "Cached",
+                        fl!("details-row-cached"),
                         from_local(&|s| {
-                            format!(
-                                "{}{} file(s), {}",
-                                s.cached_files,
-                                if s.truncated { "+" } else { "" },
-                                human_bytes(s.cached_bytes)
-                            )
+                            if s.truncated {
+                                fl!(
+                                    "details-files-size-more",
+                                    count = s.cached_files,
+                                    size = human_bytes(s.cached_bytes)
+                                )
+                            } else {
+                                fl!(
+                                    "details-files-size",
+                                    count = s.cached_files,
+                                    size = human_bytes(s.cached_bytes)
+                                )
+                            }
                         }),
                     ),
                 },
@@ -340,12 +362,12 @@ impl DetailsState {
         }
         let cached = match self.local.ok() {
             Some(Local::File { cached, .. }) => match cached {
-                None => "No".to_string(),
-                Some(c) if c.have >= c.size => "Yes".to_string(),
-                Some(c) => format!(
-                    "Partly ({} of {})",
-                    human_bytes(c.have),
-                    human_bytes(c.size)
+                None => fl!("common-no"),
+                Some(c) if c.have >= c.size => fl!("common-yes"),
+                Some(c) => fl!(
+                    "details-cached-partly",
+                    have = human_bytes(c.have),
+                    size = human_bytes(c.size)
                 ),
             },
             _ if self.local.waiting() => PLACEHOLDER.to_string(),
@@ -364,12 +386,15 @@ impl DetailsState {
         };
         vec![
             (
-                "Drive modified",
+                fl!("details-row-drive-modified"),
                 from_drive(&|d| d.modified.map(status::fmt_time)),
             ),
-            ("Cached locally", cached),
-            ("Size", size),
-            ("Version", from_drive(&|d| d.version.clone())),
+            (fl!("details-row-cached-locally"), cached),
+            (fl!("details-row-size"), size),
+            (
+                fl!("details-row-version"),
+                from_drive(&|d| d.version.clone()),
+            ),
         ]
     }
 
@@ -379,15 +404,15 @@ impl DetailsState {
     pub fn sharing_summary(&self) -> String {
         match &self.drive {
             Load::Pending => PLACEHOLDER.to_string(),
-            Load::Done(Err(_)) => "Unavailable".to_string(),
-            Load::Done(Ok(d)) if !d.shared => "Not shared".to_string(),
+            Load::Done(Err(_)) => fl!("details-sharing-unavailable"),
+            Load::Done(Ok(d)) if !d.shared => fl!("details-sharing-not-shared"),
             Load::Done(Ok(d)) => {
                 let others = d
                     .permissions
                     .iter()
                     .filter(|p| p.role != drive::Role::Owner)
                     .count();
-                format!("Shared with {others}")
+                fl!("details-sharing-shared-with", count = others)
             }
         }
     }
@@ -398,15 +423,14 @@ impl DetailsState {
             Load::Pending => Some(("content-loading-symbolic", PLACEHOLDER.to_string())),
             Load::Done(Err(e)) => Some((
                 "dialog-warning-symbolic",
-                format!("Couldn't load sharing info: {e}"),
+                fl!("details-sharing-error", error = e.as_str()),
             )),
-            Load::Done(Ok(d)) if !d.shared => Some((
-                "changes-prevent-symbolic",
-                "Only you have access".to_string(),
-            )),
+            Load::Done(Ok(d)) if !d.shared => {
+                Some(("changes-prevent-symbolic", fl!("details-sharing-only-you")))
+            }
             Load::Done(Ok(d)) if d.permissions.is_empty() => Some((
                 "dialog-information-symbolic",
-                "Google Drive didn't list who has access".to_string(),
+                fl!("details-sharing-unlisted"),
             )),
             Load::Done(Ok(_)) => None,
         }
@@ -431,22 +455,23 @@ impl DetailsState {
         let covering = pin::covering_pin(&self.cfg.pins, &rel);
         let (title, caption, button) = match covering {
             Some(p) if p != rel => (
-                "Available offline".to_string(),
-                format!(
-                    "Part of the offline folder {p} · {}",
-                    pin::describe(self.offline.pin(p), None)
+                Phase::Ready.label(),
+                fl!(
+                    "details-offline-part-of",
+                    folder = p,
+                    state = pin::describe(self.offline.pin(p), None)
                 ),
                 OfflineButton::Hidden,
             ),
             _ if !self.is_dir => return None,
             Some(p) => (
-                "Keep offline".to_string(),
+                fl!("details-keep-offline"),
                 pin::describe(self.offline.pin(p), self.offline_usage),
                 OfflineButton::Stop,
             ),
             None => (
-                "Keep offline".to_string(),
-                "Download this folder and keep it in sync both ways".to_string(),
+                fl!("details-keep-offline"),
+                fl!("details-keep-offline-hint"),
                 OfflineButton::Keep,
             ),
         };
@@ -470,7 +495,6 @@ impl DetailsState {
                     .pin(&p)
                     .map_or(Phase::Downloading, |s| s.phase)
                     .label()
-                    .to_string()
             })
     }
 
@@ -478,8 +502,13 @@ impl DetailsState {
 
     pub fn buttons(&self) -> Buttons {
         let manage_label = self.target.ok().map_or_else(
-            || "Manage Sharing".to_string(),
-            |t| format!("Manage Sharing ({})", t.provider.name()),
+            || fl!("details-manage-sharing"),
+            |t| {
+                fl!(
+                    "details-manage-sharing-provider",
+                    provider = t.provider.name()
+                )
+            },
         );
         Buttons {
             open: if self.is_dir {
@@ -512,7 +541,7 @@ impl DetailsState {
         let rows = self.detail_rows();
         let row = |label: &str| {
             rows.iter()
-                .find(|(l, _)| *l == label)
+                .find(|(l, _)| l == label)
                 .map_or_else(String::new, |(_, v)| v.clone())
         };
         let buttons = self.buttons();
@@ -521,10 +550,13 @@ impl DetailsState {
             .sharing_note()
             .map_or((String::new(), String::new()), |(i, t)| (i.to_string(), t));
         let (cached_label, cached) = if self.is_dir {
-            let label = rows.get(2).map_or("Cached", |r| r.0);
-            (label.to_string(), row(label))
+            let label = rows
+                .get(2)
+                .map_or_else(|| fl!("details-row-cached"), |r| r.0.clone());
+            let value = row(&label);
+            (label, value)
         } else {
-            ("Cached".to_string(), String::new())
+            (fl!("details-row-cached"), String::new())
         };
         DetailsView {
             name: self.name.clone(),
@@ -535,12 +567,12 @@ impl DetailsState {
             sync_label,
             sync_icon: sync_icon.to_string(),
             sync_detail,
-            drive_modified: row("Drive modified"),
-            cache_state: row("Cached locally"),
-            size: row("Size"),
-            version: row("Version"),
-            uploading: row("Uploading"),
-            downloading: row("Downloading"),
+            drive_modified: row(&fl!("details-row-drive-modified")),
+            cache_state: row(&fl!("details-row-cached-locally")),
+            size: row(&fl!("details-row-size")),
+            version: row(&fl!("details-row-version")),
+            uploading: row(&fl!("details-row-uploading")),
+            downloading: row(&fl!("details-row-downloading")),
             cached,
             cached_label,
             shared: matches!(&self.drive, Load::Done(Ok(d)) if d.shared),
@@ -614,7 +646,7 @@ pub fn parent_dir(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::MIN_LOADING;
+    use crate::MIN_LOADING;
     use rclone_ui_core::drive::Role;
     use rclone_ui_core::share::Provider;
     use rclone_ui_core::status::{Cached, FolderSummary};
@@ -918,13 +950,13 @@ mod tests {
 
     // ---- detail rows ----
 
-    fn labels(rows: &[(&'static str, String)]) -> Vec<&'static str> {
-        rows.iter().map(|(l, _)| *l).collect()
+    fn labels(rows: &[(String, String)]) -> Vec<&str> {
+        rows.iter().map(|(l, _)| l.as_str()).collect()
     }
 
-    fn value<'a>(rows: &'a [(&'static str, String)], label: &str) -> &'a str {
+    fn value<'a>(rows: &'a [(String, String)], label: &str) -> &'a str {
         rows.iter()
-            .find(|(l, _)| *l == label)
+            .find(|(l, _)| l == label)
             .map(|(_, v)| v.as_str())
             .unwrap()
     }

@@ -26,6 +26,7 @@ pub use readers::parse_kconfig;
 use crate::config::{self, Config};
 use crate::identity::{COSMIC_DESKTOP_ID, SLUG};
 use crate::units;
+use rclone_ui_i18n::fl;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -379,20 +380,30 @@ impl Step {
 impl std::fmt::Display for Step {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Step::Systemctl { args, best_effort } => write!(
-                f,
-                "systemctl --user {}{}",
-                args.join(" "),
+            Step::Systemctl { args, best_effort } => {
+                let args = args.join(" ");
                 if *best_effort {
-                    "  (ignored if it fails)"
+                    f.write_str(&fl!("migrate-step-systemctl-best-effort", args = args))
                 } else {
-                    ""
+                    f.write_str(&fl!("migrate-step-systemctl", args = args))
                 }
-            ),
-            Step::Rename { from, to } => write!(f, "rename {} -> {}", from.display(), to.display()),
-            Step::Write { path, .. } => write!(f, "write {}", path.display()),
-            Step::Remove(p) => write!(f, "remove {}", p.display()),
-            Step::RemoveDirIfEmpty(p) => write!(f, "remove {} if empty", p.display()),
+            }
+            Step::Rename { from, to } => f.write_str(&fl!(
+                "migrate-step-rename",
+                from = from.display().to_string(),
+                to = to.display().to_string()
+            )),
+            Step::Write { path, .. } => f.write_str(&fl!(
+                "migrate-step-write",
+                path = path.display().to_string()
+            )),
+            Step::Remove(p) => {
+                f.write_str(&fl!("migrate-step-remove", path = p.display().to_string()))
+            }
+            Step::RemoveDirIfEmpty(p) => f.write_str(&fl!(
+                "migrate-step-remove-dir",
+                path = p.display().to_string()
+            )),
         }
     }
 }
@@ -413,18 +424,14 @@ pub struct Plan {
 impl std::fmt::Display for Plan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.done {
-            return writeln!(f, "Already migrated: nothing to do.");
+            return writeln!(f, "{}", fl!("migrate-already-done"));
         }
         match self.source {
-            Some(o) => writeln!(
-                f,
-                "Migrating the old {} install to rclone-shell-ext:",
-                o.label()
-            )?,
-            None => writeln!(f, "No old install found; only the marker file is written:")?,
+            Some(o) => writeln!(f, "{}", fl!("migrate-plan-header", origin = o.label()))?,
+            None => writeln!(f, "{}", fl!("migrate-plan-header-none"))?,
         }
         for n in &self.notes {
-            writeln!(f, "  note: {n}")?;
+            writeln!(f, "  {}", fl!("migrate-plan-note", note = n.as_str()))?;
         }
         for (i, s) in self.steps.iter().enumerate() {
             writeln!(f, "  {:>2}. {s}", i + 1)?;
@@ -451,14 +458,7 @@ fn choose(old: &[OldFacts]) -> Result<Option<(&OldFacts, Vec<&OldFacts>)>, Strin
                         .collect();
                     match enabled.as_slice() {
                         [one] => Some(*one),
-                        _ => {
-                            return Err(
-                                "both the old COSMIC and the old Plasma installs have offline \
-                                 folders set up, and it isn't clear which one is in use; turn \
-                                 offline folders off in the one you don't use, then try again"
-                                    .into(),
-                            )
-                        }
+                        _ => return Err(fl!("migrate-error-ambiguous")),
                     }
                 }
             }
@@ -468,11 +468,7 @@ fn choose(old: &[OldFacts]) -> Result<Option<(&OldFacts, Vec<&OldFacts>)>, Strin
 }
 
 fn conflict(what: &Path) -> String {
-    format!(
-        "{} already exists and isn't empty, so the old data can't be moved there; move it aside \
-         or remove it, then try again. Nothing was changed.",
-        what.display()
-    )
+    fl!("migrate-error-conflict", path = what.display().to_string())
 }
 
 /// Work out what to do. Pure: it only looks at `facts`.
@@ -488,9 +484,9 @@ fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, String> {
     if let Some((old, others)) = choose(&facts.old)? {
         plan.source = Some(old.origin);
         for other in others {
-            plan.notes.push(format!(
-                "an old {} install was also found; it is left untouched",
-                other.origin.label()
+            plan.notes.push(fl!(
+                "migrate-note-other-left",
+                origin = other.origin.label()
             ));
         }
         old_install_steps(env, facts, old, &mut plan, &mut steps)?;
@@ -540,19 +536,15 @@ fn old_install_steps(
     ] {
         if let Some(text) = text {
             if !text.starts_with(&format!("# Written by {}", origin.slug())) {
-                return Err(format!(
-                    "{} isn't one this app wrote, so it won't be replaced; remove it yourself \
-                     if it is no longer needed. Nothing was changed.",
-                    unit_dir.join(unit).display()
+                return Err(fl!(
+                    "migrate-error-unit-not-ours",
+                    path = unit_dir.join(unit).display().to_string()
                 ));
             }
         }
     }
     if old.has_units() && env.exe.as_os_str().is_empty() {
-        return Err(format!(
-            "can't find the `{SLUG}` program (next to this one or on PATH), which the new \
-             services must run. Nothing was changed."
-        ));
+        return Err(fl!("migrate-error-no-exe"));
     }
     let (old_flat, new_flat) = (
         format!("{}_", flat(&old_data.join("offline"))),
@@ -566,14 +558,12 @@ fn old_install_steps(
         .collect();
     for (_, new_name) in &listing_moves {
         if new_name.len() > FILE_NAME_MAX {
-            return Err(format!(
-                "bisync's working file {new_name} would be too long for the file system under \
-                 the new name. Nothing was changed."
-            ));
+            return Err(fl!("migrate-error-name-too-long", name = new_name.as_str()));
         }
         if old.bisync_files.contains(new_name) && old.state_dir {
-            return Err(format!(
-                "bisync's working files already include {new_name}. Nothing was changed."
+            return Err(fl!(
+                "migrate-error-listing-exists",
+                name = new_name.as_str()
             ));
         }
     }
@@ -622,16 +612,14 @@ fn old_install_steps(
     // 3. The settings.
     if let Some(cfg) = &old.config {
         if facts.new_config {
-            plan.notes
-                .push("a new config.toml already exists; it is kept as is".into());
+            plan.notes.push(fl!("migrate-note-config-kept"));
         } else {
             steps.push(Step::Write {
                 path: config::config_path_in(&env.config_home, SLUG),
                 content: toml::to_string_pretty(cfg).map_err(|e| e.to_string())?,
             });
         }
-        plan.notes
-            .push("the old config file is left in place (delete it when you are happy)".into());
+        plan.notes.push(fl!("migrate-note-old-config-left"));
     }
 
     // 4. The units: new ones in, old ones out.
@@ -690,7 +678,7 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Str
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             match env.sysctl(&refs) {
                 Err(e) if !best_effort => return Err(e),
-                Err(e) => log.push(format!("ignored: {e}")),
+                Err(e) => log.push(fl!("migrate-log-ignored", error = e)),
                 Ok(_) => {}
             }
         }
@@ -700,7 +688,10 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Str
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && to.exists() => {}
             // An old cache directory that was never created is not a problem.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                log.push(format!("skipped {}: not there", from.display()));
+                log.push(fl!(
+                    "migrate-log-skipped",
+                    path = from.display().to_string()
+                ));
             }
             Err(e) => return Err(format!("{} -> {}: {e}", from.display(), to.display())),
         },
@@ -731,25 +722,24 @@ pub fn run(env: &Env) -> Result<Vec<String>, String> {
     }
     let mut log = Vec::new();
     for (i, step) in plan.steps.iter().enumerate() {
-        execute_step(env, step, &mut log).map_err(|e| {
-            format!(
-                "step {} of {} ({step}) failed: {e}. The old install may be partly moved; run \
-                 `{SLUG} --migrate` again to finish.",
-                i + 1,
-                plan.steps.len()
+        let number: usize = i + 1;
+        execute_step(env, step, &mut log).map_err(|e: String| {
+            fl!(
+                "migrate-error-step-failed",
+                number = number,
+                total = plan.steps.len(),
+                step = step.to_string(),
+                error = e
             )
         })?;
     }
-    let mut out = vec![format!(
-        "rclone-shell-ext: migrated {}.",
-        plan.source
-            .map_or("(nothing to move)".to_string(), |o| format!(
-                "the old {} install",
-                o.label()
-            ))
-    )];
-    out.extend(plan.notes.iter().map(|n| format!("rclone-shell-ext: {n}")));
-    out.extend(log.into_iter().map(|l| format!("rclone-shell-ext: {l}")));
+    let line = |text: &str| fl!("migrate-line", text = text);
+    let mut out = vec![line(&plan.source.map_or_else(
+        || fl!("migrate-done-nothing"),
+        |o| fl!("migrate-done-from", origin = o.label()),
+    ))];
+    out.extend(plan.notes.iter().map(|n| line(n)));
+    out.extend(log.iter().map(|l| line(l)));
     Ok(out)
 }
 
@@ -807,7 +797,7 @@ pub fn run_if_needed() {
     }
     match with_process_env(run) {
         Ok(lines) => lines.iter().for_each(|l| eprintln!("{l}")),
-        Err(e) => eprintln!("rclone-shell-ext: migrating the old install failed: {e}"),
+        Err(e) => eprintln!("{}", fl!("migrate-failed", error = e)),
     }
     let _ = std::fs::remove_file(&lock);
 }
