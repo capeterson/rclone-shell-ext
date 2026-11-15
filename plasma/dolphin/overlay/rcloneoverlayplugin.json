@@ -1,0 +1,9 @@
+{
+    "KPlugin": {
+        "Id": "rcloneoverlayplugin",
+        "Name": "rclone sync status overlays",
+        "Description": "Shows rclone sync state emblems on files in the rclone mount",
+        "License": "GPL-3.0",
+        "Version": "0.1.0"
+    }
+}

@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["rclone-plasma", "rclone-plasma-ui"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-only"
+version = "0.1.0"
+
+[workspace.dependencies]
+# Path for development; switch to the git dependency once core-crate is merged upstream:
+# rclone-ui-core = { git = "https://github.com/capeterson/cosmic-rclone-ui", branch = "main" }
+rclone-ui-core = { path = "../cosmic-rclone-ui/core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
