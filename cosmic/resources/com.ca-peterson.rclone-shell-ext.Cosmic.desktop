@@ -2,7 +2,7 @@
 Name=rclone UI
 Comment=Show rclone mount and upload status in the panel
 Type=Application
-Exec=cosmic-rclone-ui
+Exec=rclone-shell-ext-cosmic
 Terminal=false
 Categories=COSMIC;
 Keywords=COSMIC;Applet;rclone;Drive;

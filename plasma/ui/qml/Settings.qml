@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The settings window (`rclone-plasma --settings`): offline folders setup and the pinned list,
+// The settings window (`rclone-shell-ext-plasma --settings`): offline folders setup and the pinned list,
 // plus the Dolphin integration.
 pragma ComponentBehavior: Bound
 
@@ -8,7 +8,7 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.formcard as FormCard
-import com.ca_peterson.RclonePlasma
+import com.ca_peterson.RcloneShellExt
 
 Kirigami.ApplicationWindow {
     id: root

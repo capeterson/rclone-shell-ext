@@ -1,4 +1,4 @@
-# cosmic-rclone-ui
+# rclone-shell-ext
 
 A [COSMIC](https://github.com/pop-os/cosmic-epoch) panel applet that shows the status of an
 [rclone](https://rclone.org) mount: synced, uploading, downloading, both, error, or mount down.
@@ -15,7 +15,8 @@ Status is read from rclone's remote-control API (`--rc`: `core/stats`, `vfs/stat
 This is a monorepo (work in progress, see `docs/architecture.md`):
 
 - `crates/core`: toolkit-free rclone logic shared by every front end.
-- `cosmic/`: the COSMIC panel applet (`cosmic-rclone-ui`).
+- `crates/cli`: the shared `rclone-shell-ext` binary (offline-folder keeper, pins, status, sharing, migration).
+- `cosmic/`: the COSMIC panel applet (`rclone-shell-ext-cosmic`).
 - `plasma/`: the KDE Plasma front end (`daemon/`, `ui/`, `plasmoid/`, `dolphin/`).
 - `resources/`: shared SVG assets.
 
@@ -34,7 +35,7 @@ Run `just --list` for the build, test and install recipes (`just cosmic::...`, `
 
 ## Configuration
 
-Defaults (stored in cosmic-config under `com.ca-peterson.CosmicRcloneUi`):
+Defaults (stored in `~/.config/rclone-shell-ext/config.toml`, shared by both front ends):
 
 | Key | Default |
 |---|---|
@@ -59,13 +60,13 @@ Settings, then right-click a folder in COSMIC Files → **rclone…** → **Keep
 
 How it works:
 
-- The folder's local copy lives in `~/.local/share/cosmic-rclone-ui/offline/<id>` and is
+- The folder's local copy lives in `~/.local/share/rclone-shell-ext/offline/<id>` and is
   synced with `rclone bisync`, run *inside the mount's own rclone process* through its rc API
   (`sync/bisync`), so there is no second rclone config or login. A background user service
-  (`cosmic-rclone-ui-offline.service`) runs each sync: every `sync_interval_secs`, and about
+  (`rclone-shell-ext-offline.service`) runs each sync: every `sync_interval_secs`, and about
   10 seconds after a local change.
 - The local copy is mounted on top of the folder's place in the Drive folder
-  (`cosmic-rclone-ui-pin@<id>.service`), so it shows up in place. Both services are bound to
+  (`rclone-shell-ext-pin@<id>.service`), so it shows up in place. Both services are bound to
   the mount's service and start and stop with it; a folder that has been downloaded is mounted
   even when offline.
 - Conflicts (the same file changed on both sides between syncs) are resolved as *newer wins*:
@@ -87,12 +88,12 @@ Turning the switch on first shows a dialog listing every change setup will make 
 not already done); **Continue** goes on to the password prompt, **Cancel** changes nothing and
 leaves the switch off. If setup can't finish (for example the password prompt is dismissed), it
 is undone and the switch goes back off. Before `/etc/fuse.conf` is edited it is copied to
-`/etc/fuse.conf.cosmic-rclone-ui-<date-time>.bak`; if that copy fails the file is left alone.
+`/etc/fuse.conf.rclone-shell-ext-<date-time>.bak`; if that copy fails the file is left alone.
 
 What setup does: mounting inside the Drive mount needs the Drive mount to use
 `--allow-other`, which ordinary users can only request once `user_allow_other` is set in
 `/etc/fuse.conf` (one line, added through the system password prompt). The app then adds a
-drop-in for the mount's service (`<service>.d/50-cosmic-rclone-ui.conf`) that sets
+drop-in for the mount's service (`<service>.d/50-rclone-shell-ext.conf`) that sets
 `--allow-other` together with `--default-permissions` and a `077` umask, so other users still
 can't open your files, and restarts the mount once. Turning offline folders off removes the
 services and the drop-in; the `/etc/fuse.conf` line is left in place.
@@ -140,13 +141,17 @@ toolkit: the rclone RC client, status, the offline-folder keeper, systemd unit g
 depend on libcosmic, so other front ends (e.g. KDE Plasma) can depend on it. The COSMIC applet is
 a thin UI on top of it. Two seams let a front end plug in:
 
-- **Config**: implement `config::ConfigStore` (`load` / `save`) and install it once at start-up
-  with `config::set_store`. Core code reads settings through `config::store()`. The applet
-  registers a `CosmicStore` that keeps the same `cosmic_config` entry (version 1) as before.
-- **Identity**: call `identity::set_identity(Identity { slug, app_id })` at start-up. The slug
-  names the data/state directories, systemd units, drop-in and backup files
-  (`cosmic-rclone-ui`, or `cosmic-rclone-ui-dev` for the dev build). Unset, it defaults to the
-  COSMIC applet's values.
+- **Config**: every binary calls `config::install_default_store()` at start-up, which installs a
+  `config::TomlStore` on `$XDG_CONFIG_HOME/rclone-shell-ext/config.toml`. Core code reads
+  settings through `config::store()`; front ends that show settings poll `TomlStore::mtime()`.
+- **Identity**: call `identity::set_identity(Identity::RELEASE)` (or `Identity::DEV` for the dev
+  build) at start-up. The slug names the data/state directories, systemd units, drop-in and
+  backup files (`rclone-shell-ext`, or `rclone-shell-ext-dev`). There is no default: asking for
+  the identity before setting it panics.
+
+An install made by the old per-front-end names (`cosmic-rclone-ui`, `rclone-plasma`) is moved
+over the first time any binary starts (see `docs/architecture.md`); `rclone-shell-ext --migrate
+--dry-run` shows what that would do.
 
 Run all tests with `cargo test --workspace`.
 
@@ -158,7 +163,7 @@ just install-user      # builds and installs under ~/.local
 ```
 
 Then add "rclone UI" in COSMIC Settings → Desktop → Panel → Configure panel applets.
-`cosmic-rclone-ui --status` prints one status snapshot without the panel.
+`rclone-shell-ext --status` prints one status snapshot without the panel.
 
 ## Notes
 

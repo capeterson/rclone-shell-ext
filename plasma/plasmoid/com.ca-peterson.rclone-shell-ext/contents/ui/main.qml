@@ -6,9 +6,9 @@ import org.kde.plasma.workspace.dbus as DBus
 PlasmoidItem {
     id: root
 
-    readonly property string busService: "com.ca-peterson.RclonePlasma"
-    readonly property string busPath: "/com/ca_peterson/RclonePlasma"
-    readonly property string busIface: "com.ca_peterson.RclonePlasma1"
+    readonly property string busService: "com.ca-peterson.rclone-shell-ext"
+    readonly property string busPath: "/com/ca_peterson/rclone_shell_ext"
+    readonly property string busIface: "com.ca_peterson.RcloneShellExt1"
 
     // Parsed StatusJson, or null when the daemon is absent / unparsable.
     property var status: null

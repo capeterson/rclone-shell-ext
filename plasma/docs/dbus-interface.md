@@ -1,11 +1,11 @@
-# D-Bus interface: `com.ca-peterson.RclonePlasma`
+# D-Bus interface: `com.ca-peterson.rclone-shell-ext`
 
-This is the single contract between the Rust daemon (`rclone-plasma --daemon`), the QML plasmoid, the cxx-qt windows, and the C++ Dolphin plugins. Change it here first.
+This is the single contract between the Rust daemon (`rclone-shell-ext-plasma --daemon`), the QML plasmoid, the cxx-qt windows, and the C++ Dolphin plugins. Change it here first.
 
 - Bus: **session**
-- Service name: `com.ca-peterson.RclonePlasma`. It is D-Bus-activated through `dbus/com.ca-peterson.RclonePlasma.service`, whose `Exec` is `rclone-plasma --daemon`.
-- Object path: `/com/ca_peterson/RclonePlasma`
-- Interface: `com.ca_peterson.RclonePlasma1`
+- Service name: `com.ca-peterson.rclone-shell-ext`. It is D-Bus-activated through `dbus/com.ca-peterson.rclone-shell-ext.service`, whose `Exec` is `rclone-shell-ext-plasma --daemon`.
+- Object path: `/com/ca_peterson/rclone_shell_ext`
+- Interface: `com.ca_peterson.RcloneShellExt1`
 
 ## Properties (read-only; changes are announced with `org.freedesktop.DBus.Properties.PropertiesChanged`)
 
@@ -25,8 +25,8 @@ Each value maps to an installed icon named `rclone-plasma-<kebab>`: `rclone-plas
 |---|---|
 | `ServiceAction(s verb) -> b` | `verb` ∈ `restart`, `stop`, `start` (runs `systemctl --user <verb> <service>`). |
 | `OpenFolder()` | Opens the mount path with `xdg-open`. |
-| `OpenDetails(s path)` | Spawns `rclone-plasma --menu <path>`. `path` is an absolute local path, or remote-relative if it doesn't start with `/`. |
-| `OpenSettings()` | Spawns `rclone-plasma --settings`. |
+| `OpenDetails(s path)` | Spawns `rclone-shell-ext-plasma --menu <path>`. `path` is an absolute local path, or remote-relative if it doesn't start with `/`. |
+| `OpenSettings()` | Spawns `rclone-shell-ext-plasma --settings`. |
 | `FileStates(as paths) -> a{sas}` | Maps each absolute local path to emblem icon names (see the Overlay emblems section below). A path outside the mount maps to `[]`. This must answer quickly from a cache: a cache miss returns `[]` straight away and computes the state in the background. When the state is ready, the daemon emits `ItemsChanged`. |
 | `GetConfig() -> s` | The config as JSON (fields from `rclone_ui_core::config::Config`). |
 | `SetConfig(s json) -> s` | Merges these JSON fields into the config, saves it, and returns `""` on success or an error message. |

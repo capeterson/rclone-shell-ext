@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::config::{Config, ConfigExt, CosmicConfig};
+use crate::config::{Config, ConfigExt, ConfigWatch, WATCH_EVERY};
 use crate::history::with_changes;
 use crate::mime_icon;
 use crate::pin::{self, OfflineState};
@@ -33,6 +33,8 @@ pub struct AppModel {
     core: cosmic::Core,
     popup: Option<Id>,
     config: Config,
+    /// Notices settings changed by someone else.
+    config_watch: ConfigWatch,
     status: Option<Status>,
     /// Avoid stacking requests when rclone is slow to answer.
     fetching: bool,
@@ -49,7 +51,8 @@ pub struct AppModel {
 pub enum Message {
     TogglePopup,
     PopupClosed(Id),
-    UpdateConfig(Config),
+    /// Time to look at the settings file for outside changes.
+    ConfigTick,
     Tick,
     StatusUpdated(Status),
     /// The background fetch panicked or was cancelled; allow the next tick to retry.
@@ -560,7 +563,7 @@ impl cosmic::Application for AppModel {
     }
 
     fn init(core: cosmic::Core, _flags: ()) -> (Self, Task<cosmic::Action<Message>>) {
-        let config = Config::load(Self::APP_ID);
+        let config = Config::load();
         if config.context_menu {
             crate::context_menu::install();
         }
@@ -601,15 +604,17 @@ impl cosmic::Application for AppModel {
         };
         Subscription::batch(vec![
             time::every(every).map(|_| Message::Tick),
-            self.core()
-                .watch_config::<CosmicConfig>(Self::APP_ID)
-                .map(|update| Message::UpdateConfig(update.config.into())),
+            time::every(WATCH_EVERY).map(|_| Message::ConfigTick),
         ])
     }
 
     fn update(&mut self, message: Message) -> Task<cosmic::Action<Message>> {
         match message {
-            Message::UpdateConfig(c) => self.config = c,
+            Message::ConfigTick => {
+                if let Some(c) = self.config_watch.poll() {
+                    self.config = c;
+                }
+            }
             Message::StatusUpdated(mut st) => {
                 if self.config.offline_enabled {
                     st.recent = with_changes(st.recent, &self.offline.changes);
@@ -813,17 +818,6 @@ mod tests {
         assert!(!app.fetching, "no immediate retry");
         let _ = app.update(Message::Tick);
         assert!(app.fetching);
-    }
-
-    #[test]
-    fn config_update_replaces_config() {
-        let mut app = AppModel::default();
-        let c = Config {
-            rc_addr: "127.0.0.1:1".into(),
-            ..Config::default()
-        };
-        let _ = app.update(Message::UpdateConfig(c.clone()));
-        assert_eq!(app.config, c);
     }
 
     fn ts(s: &str) -> jiff::Timestamp {

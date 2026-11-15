@@ -9,9 +9,9 @@
 
 namespace
 {
-const QString kService = QStringLiteral("com.ca-peterson.RclonePlasma");
-const QString kPath = QStringLiteral("/com/ca_peterson/RclonePlasma");
-const QString kIface = QStringLiteral("com.ca_peterson.RclonePlasma1");
+const QString kService = QStringLiteral("com.ca-peterson.rclone-shell-ext");
+const QString kPath = QStringLiteral("/com/ca_peterson/rclone_shell_ext");
+const QString kIface = QStringLiteral("com.ca_peterson.RcloneShellExt1");
 constexpr qint64 kBackoffMs = 10000;
 }
 

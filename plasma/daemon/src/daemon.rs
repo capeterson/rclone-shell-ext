@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The D-Bus service (`rclone-plasma --daemon`). See `docs/dbus-interface.md`.
+//! The D-Bus service (`rclone-shell-ext-plasma --daemon`). See `docs/dbus-interface.md`.
 //!
 //! Two worker threads feed shared state: the poller (rclone status every 2 s, offline state,
 //! history debounce, property updates, cache invalidation) and the emblem worker (answers
@@ -21,9 +21,9 @@ use zbus::blocking::{connection, Connection};
 use zbus::fdo::RequestNameFlags;
 use zbus::zvariant::Value;
 
-const NAME: &str = "com.ca-peterson.RclonePlasma";
-const PATH: &str = "/com/ca_peterson/RclonePlasma";
-const IFACE: &str = "com.ca_peterson.RclonePlasma1";
+const NAME: &str = "com.ca-peterson.rclone-shell-ext";
+const PATH: &str = "/com/ca_peterson/rclone_shell_ext";
+const IFACE: &str = "com.ca_peterson.RcloneShellExt1";
 const POLL: Duration = Duration::from_secs(2);
 const WORKER_BATCH: usize = 64;
 
@@ -94,7 +94,7 @@ fn mount_dir(cfg: &Config) -> String {
 struct Service(Arc<Shared>);
 
 #[allow(clippy::unused_self)]
-#[zbus::interface(name = "com.ca_peterson.RclonePlasma1")]
+#[zbus::interface(name = "com.ca_peterson.RcloneShellExt1")]
 impl Service {
     #[zbus(property)]
     fn health(&self) -> String {

@@ -1,5 +1,5 @@
 [package]
-name = "rclone-plasma"
+name = "rclone-shell-ext-plasma"
 description = "KDE Plasma front end for rclone mounts: CLI, D-Bus daemon"
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,8 @@ version.workspace = true
 
 [dependencies]
 rclone-ui-core.workspace = true
-rclone-plasma-ui = { path = "../ui" }
+rclone-shell-ext-plasma-ui = { path = "../ui" }
+rclone-shell-ext.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jiff.workspace = true

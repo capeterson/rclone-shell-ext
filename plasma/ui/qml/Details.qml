@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The details window for one file or folder (`rclone-plasma --menu PATH`). A fixed-size window:
+// The details window for one file or folder (`rclone-shell-ext-plasma --menu PATH`). A fixed-size window:
 // one loading screen until everything has arrived, then the finished layout in one step.
 pragma ComponentBehavior: Bound
 
@@ -7,7 +7,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import com.ca_peterson.RclonePlasma
+import com.ca_peterson.RcloneShellExt
 
 Kirigami.ApplicationWindow {
     id: root

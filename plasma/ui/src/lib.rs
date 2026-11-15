@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Kirigami windows for rclone-plasma, hosted from Rust with cxx-qt. The binary crate calls these
+//! Kirigami windows for rclone-shell-ext on Plasma, hosted from Rust with cxx-qt. The binary crate calls these
 //! entry points after it has installed the config store and identity
-//! (`rclone_ui_core::config::set_store`, `rclone_ui_core::identity::set_identity`). Each runs a Qt
+//! (`rclone_ui_core::config::install_default_store`, `rclone_ui_core::identity::set_identity`). Each runs a Qt
 //! event loop and returns an exit code.
 
 mod bridge;
@@ -10,16 +10,16 @@ pub mod logic;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 
 /// The QML module URI (see `build.rs`).
-const MODULE_URI: &str = "com.ca_peterson.RclonePlasma";
-const APP_ID: &str = "com.ca-peterson.RclonePlasma";
+const MODULE_URI: &str = "com.ca_peterson.RcloneShellExt";
+const APP_ID: &str = rclone_ui_core::identity::PLASMA_DESKTOP_ID;
 
-/// `rclone-plasma --menu PATH...`: the details window for a mounted file or folder.
+/// `rclone-shell-ext-plasma --menu PATH...`: the details window for a mounted file or folder.
 pub fn run_details(paths: &[String]) -> i32 {
     bridge::details::set_initial_paths(paths);
     run_qml("Details.qml", "rclone")
 }
 
-/// `rclone-plasma --settings`: the settings window (offline folders setup, integrations).
+/// `rclone-shell-ext-plasma --settings`: the settings window (offline folders setup, integrations).
 pub fn run_settings() -> i32 {
     run_qml("Settings.qml", "rclone settings")
 }
@@ -28,8 +28,8 @@ pub fn run_settings() -> i32 {
 /// loop until the window closes.
 fn run_qml(file: &str, display_name: &str) -> i32 {
     // Make sure the generated QML types and the module's resources are linked in.
-    cxx_qt::init_crate!(rclone_plasma_ui);
-    cxx_qt::init_qml_module!("com.ca_peterson.RclonePlasma");
+    cxx_qt::init_crate!(rclone_shell_ext_plasma_ui);
+    cxx_qt::init_qml_module!("com.ca_peterson.RcloneShellExt");
 
     // Kirigami wants the desktop style; a user's own QT_QUICK_CONTROLS_STYLE still wins.
     if std::env::var_os("QT_QUICK_CONTROLS_STYLE").is_none() {
@@ -38,13 +38,13 @@ fn run_qml(file: &str, display_name: &str) -> i32 {
 
     let mut app = QGuiApplication::new();
     let Some(mut app) = app.as_mut() else {
-        eprintln!("rclone-plasma: could not create the Qt application");
+        eprintln!("rclone-shell-ext-plasma: could not create the Qt application");
         return 1;
     };
     app.as_mut()
         .set_organization_name(&QString::from("ca-peterson"));
     app.as_mut()
-        .set_application_name(&QString::from("rclone-plasma"));
+        .set_application_name(&QString::from("rclone-shell-ext"));
     app.as_mut()
         .set_application_display_name(&QString::from(display_name));
     // Plasma matches the window to its launcher (and takes the `rclone-plasma` icon) through
@@ -55,7 +55,7 @@ fn run_qml(file: &str, display_name: &str) -> i32 {
 
     let mut engine = QQmlApplicationEngine::new();
     let Some(mut engine) = engine.as_mut() else {
-        eprintln!("rclone-plasma: could not create the QML engine");
+        eprintln!("rclone-shell-ext-plasma: could not create the QML engine");
         return 1;
     };
     let url = qml_url(file);
@@ -80,7 +80,7 @@ mod tests {
     fn qml_files_resolve_inside_the_module() {
         assert_eq!(
             qml_url_string("Details.qml"),
-            "qrc:/qt/qml/com/ca_peterson/RclonePlasma/qml/Details.qml"
+            "qrc:/qt/qml/com/ca_peterson/RcloneShellExt/qml/Details.qml"
         );
     }
 }

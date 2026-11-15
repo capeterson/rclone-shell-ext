@@ -1,12 +1,19 @@
-name := 'cosmic-rclone-ui'
-appid := 'com.ca-peterson.CosmicRcloneUi'
+name := 'rclone-shell-ext-cosmic'
+# The shared binary: the keeper and pin units run it, and both front ends install it.
+shared := 'rclone-shell-ext'
+appid := 'com.ca-peterson.rclone-shell-ext.Cosmic'
+# The applet's icon file is still named after the old id until the icon rename lands.
+iconid := 'com.ca-peterson.CosmicRcloneUi'
+# What earlier releases were called (uninstall cleans these up too).
+oldname := 'cosmic-rclone-ui'
+oldappid := 'com.ca-peterson.CosmicRcloneUi'
 # Recipes run in this directory; the workspace target dir is one level up.
 target := '../target'
 
 default: build-release
 
 build-release:
-    cargo build --release -p {{name}}
+    cargo build --release -p {{name}} -p {{shared}}
 
 check:
     cargo clippy --all-targets -p {{name}} --locked -- -D warnings
@@ -21,29 +28,37 @@ ci:
 
 # Print one status snapshot without the panel
 status:
-    cargo run --release -p {{name}} -- --status
+    cargo run --release -p {{shared}} -- --status
 
 # Install under ~/.local so the applet can be added in COSMIC panel settings
 install-user: build-release
     install -Dm0755 {{target}}/release/{{name}} ~/.local/bin/{{name}}
+    install -Dm0755 {{target}}/release/{{shared}} ~/.local/bin/{{shared}}
     install -Dm0644 resources/{{appid}}.desktop ~/.local/share/applications/{{appid}}.desktop
-    install -Dm0644 resources/icons/hicolor/scalable/apps/{{appid}}-symbolic.svg ~/.local/share/icons/hicolor/scalable/apps/{{appid}}-symbolic.svg
+    install -Dm0644 resources/icons/hicolor/scalable/apps/{{iconid}}-symbolic.svg ~/.local/share/icons/hicolor/scalable/apps/{{iconid}}-symbolic.svg
 
+# Removes this version's files and the ones earlier versions (cosmic-rclone-ui) installed. The
+# offline-folder units go first; the shared binary stays while the Plasma front end needs it.
 uninstall-user:
-    if [ -x ~/.local/bin/{{name}} ]; then ~/.local/bin/{{name}} --offline-remove; fi
-    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{appid}}-symbolic.svg
+    if [ -x ~/.local/bin/{{shared}} ]; then ~/.local/bin/{{shared}} --offline-remove; fi
+    if [ -x ~/.local/bin/{{oldname}} ]; then ~/.local/bin/{{oldname}} --offline-remove; fi
+    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{iconid}}-symbolic.svg
+    if [ ! -e ~/.local/bin/rclone-shell-ext-plasma ]; then rm -f ~/.local/bin/{{shared}}; fi
+    rm -f ~/.local/bin/{{oldname}} ~/.local/share/applications/{{oldappid}}.desktop
 
-devid := 'com.ca-peterson.CosmicRcloneUiDev'
+devid := 'com.ca-peterson.rclone-shell-ext-dev'
+devdesktop := devid + '.Cosmic'
 
 # Install a side-by-side dev copy ("rclone UI (dev)") that doesn't touch the real applet
 install-dev:
-    APP_ID_OVERRIDE={{devid}} cargo build --release -p {{name}}
+    APP_ID_OVERRIDE={{devid}} cargo build --release -p {{name}} -p {{shared}}
     install -Dm0755 {{target}}/release/{{name}} ~/.local/bin/{{name}}-dev
-    sed -e 's/^Name=.*/Name=rclone UI (dev)/' -e 's/^Exec=.*/Exec={{name}}-dev/' resources/{{appid}}.desktop > /tmp/{{devid}}.desktop
-    install -Dm0644 /tmp/{{devid}}.desktop ~/.local/share/applications/{{devid}}.desktop
-    rm -f /tmp/{{devid}}.desktop
-    cargo build --release -p {{name}}  # restore the normal build in target/
+    install -Dm0755 {{target}}/release/{{shared}} ~/.local/bin/{{shared}}-dev
+    sed -e 's/^Name=.*/Name=rclone UI (dev)/' -e 's/^Exec=.*/Exec={{name}}-dev/' resources/{{appid}}.desktop > /tmp/{{devdesktop}}.desktop
+    install -Dm0644 /tmp/{{devdesktop}}.desktop ~/.local/share/applications/{{devdesktop}}.desktop
+    rm -f /tmp/{{devdesktop}}.desktop
+    cargo build --release -p {{name}} -p {{shared}}  # restore the normal build in target/
 
 uninstall-dev:
-    if [ -x ~/.local/bin/{{name}}-dev ]; then ~/.local/bin/{{name}}-dev --offline-remove; fi
-    rm -f ~/.local/bin/{{name}}-dev ~/.local/share/applications/{{devid}}.desktop
+    if [ -x ~/.local/bin/{{shared}}-dev ]; then ~/.local/bin/{{shared}}-dev --offline-remove; fi
+    rm -f ~/.local/bin/{{name}}-dev ~/.local/bin/{{shared}}-dev ~/.local/share/applications/{{devdesktop}}.desktop

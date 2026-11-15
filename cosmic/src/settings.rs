@@ -5,7 +5,7 @@
 //! (a line in `/etc/fuse.conf`, granted through the system's password prompt; the keeper's
 //! systemd units; one restart of the Drive mount), then lists the folders kept offline.
 
-use crate::config::{Config, ConfigExt, CosmicConfig};
+use crate::config::{Config, ConfigExt, ConfigWatch, WATCH_EVERY};
 use crate::offline_setup::{consent_items, set_up, setup_steps, tear_down, turn_on, Checks};
 use crate::pin::{self, OfflineState, Phase};
 use crate::{keeper, share};
@@ -21,7 +21,8 @@ const REFRESH: Duration = Duration::from_secs(2);
 enum Message {
     Refresh,
     Refreshed(Checks, OfflineState),
-    Config(Config),
+    /// Time to look at the settings file for outside changes.
+    ConfigTick,
     ToggleOffline(bool),
     SetUp,
     /// The consent dialog's answer.
@@ -37,6 +38,7 @@ enum Message {
 struct App {
     core: cosmic::Core,
     cfg: Config,
+    config_watch: ConfigWatch,
     checks: Checks,
     state: OfflineState,
     /// A setup or teardown is running; buttons are disabled.
@@ -83,6 +85,7 @@ impl cosmic::Application for App {
         let app = App {
             core,
             cfg,
+            config_watch: ConfigWatch::default(),
             checks: Checks::default(),
             state: OfflineState::default(),
             busy: false,
@@ -96,9 +99,7 @@ impl cosmic::Application for App {
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch(vec![
             time::every(REFRESH).map(|_| Message::Refresh),
-            self.core()
-                .watch_config::<CosmicConfig>(Self::APP_ID)
-                .map(|u| Message::Config(u.config.into())),
+            time::every(WATCH_EVERY).map(|_| Message::ConfigTick),
         ])
     }
 
@@ -115,7 +116,11 @@ impl cosmic::Application for App {
                 self.checks = c;
                 self.state = s;
             }
-            Message::Config(c) => self.cfg = c,
+            Message::ConfigTick => {
+                if let Some(c) = self.config_watch.poll() {
+                    self.cfg = c;
+                }
+            }
             Message::ToggleOffline(on) => {
                 self.error = None;
                 if on {
@@ -155,11 +160,11 @@ impl cosmic::Application for App {
                 };
                 // A failed turn-on switches itself back off; show that now, not on the next
                 // config notification.
-                self.cfg = Config::load(crate::APP_ID);
+                self.cfg = Config::load();
                 return self.update(Message::Refresh);
             }
             Message::Unpin(rel) => {
-                if let Err(e) = Config::save(crate::APP_ID, |c| c.pins.retain(|p| *p != rel)) {
+                if let Err(e) = Config::save(|c| c.pins.retain(|p| *p != rel)) {
                     self.error = Some(e);
                 }
             }
@@ -171,13 +176,11 @@ impl cosmic::Application for App {
             Message::Open(rel) => {
                 share::open_url(&pin::mount_point(&self.cfg, &rel).to_string_lossy());
             }
-            Message::ToggleContextMenu(on) => {
-                match Config::save(crate::APP_ID, |c| c.context_menu = on) {
-                    Ok(_) if on => crate::context_menu::install(),
-                    Ok(_) => crate::context_menu::remove(),
-                    Err(e) => self.error = Some(e),
-                }
-            }
+            Message::ToggleContextMenu(on) => match Config::save(|c| c.context_menu = on) {
+                Ok(_) if on => crate::context_menu::install(),
+                Ok(_) => crate::context_menu::remove(),
+                Err(e) => self.error = Some(e),
+            },
         }
         Task::none()
     }

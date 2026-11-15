@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(rclone-plasma-dolphin VERSION 0.1.0 LANGUAGES CXX)
+project(rclone-shell-ext-dolphin VERSION 0.1.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.6.0")
 set(KF_MIN_VERSION "6.0.0")
@@ -15,7 +15,7 @@ find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core DBus Widgets)
 find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO CoreAddons)
 find_package(KF6I18n ${KF_MIN_VERSION} QUIET)
 
-add_definitions(-DTRANSLATION_DOMAIN="rclone-plasma")
+add_definitions(-DTRANSLATION_DOMAIN="rclone-shell-ext")
 
 # Shared async D-Bus client (static, linked into both plugins).
 add_library(rclonedaemonclient STATIC common/daemonclient.cpp common/daemonclient.h)

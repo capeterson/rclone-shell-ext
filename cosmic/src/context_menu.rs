@@ -2,7 +2,7 @@
 //! Registers the single "rclone…" entry in COSMIC Files' right-click menu.
 //!
 //! COSMIC Files has no extension API, only a `context_actions` list in its own config, rendered
-//! flat. We add one entry that runs `cosmic-rclone-ui --menu %F` (see `menu.rs`); everything
+//! flat. We add one entry that runs `rclone-shell-ext-cosmic --menu %F` (see `menu.rs`); everything
 //! else lives in that window. The user's other entries are left alone.
 
 use cosmic::cosmic_config::{Config as CosmicConfig, ConfigGet, ConfigSet};
@@ -36,7 +36,7 @@ pub struct Preset {
 
 /// The menu label. The dev copy gets its own so it doesn't replace the real applet's entry.
 pub fn entry_name() -> &'static str {
-    if crate::APP_ID.ends_with("Dev") {
+    if crate::DEV {
         "rclone (dev)…"
     } else {
         "rclone…"
@@ -46,7 +46,7 @@ pub fn entry_name() -> &'static str {
 /// Is `name` one of ours, including the labels earlier versions used (a capitalized
 /// "Rclone…", and the prototypes' "rclone: …" entries)?
 fn is_ours(name: &str) -> bool {
-    let (legacy, capitalized) = if crate::APP_ID.ends_with("Dev") {
+    let (legacy, capitalized) = if crate::DEV {
         ("rclone (dev): ", "Rclone (dev)…")
     } else {
         ("rclone: ", "Rclone…")
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn merge_drops_prototype_entries() {
-        let legacy = if crate::APP_ID.ends_with("Dev") {
+        let legacy = if crate::DEV {
             "rclone (dev): Synced"
         } else {
             "rclone: Synced"
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn the_old_capitalized_entry_is_replaced_not_duplicated() {
-        let old = if crate::APP_ID.ends_with("Dev") {
+        let old = if crate::DEV {
             "Rclone (dev)…"
         } else {
             "Rclone…"
@@ -220,7 +220,7 @@ mod tests {
             selection: Selection::Folders,
             steps: vec!["tar czf %f.tgz %f".into()],
         };
-        let legacy = if crate::APP_ID.ends_with("Dev") {
+        let legacy = if crate::DEV {
             "rclone (dev): Synced"
         } else {
             "rclone: Synced"

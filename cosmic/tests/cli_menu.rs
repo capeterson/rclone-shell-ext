@@ -20,10 +20,13 @@ impl Sandbox {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_cosmic-rclone-ui"))
+        Command::new(env!("CARGO_BIN_EXE_rclone-shell-ext-cosmic"))
             .args(args)
             .env("HOME", &self.home)
             .env("XDG_CONFIG_HOME", self.home.join("config"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("RCLONE_SHELL_EXT_NO_MIGRATE", "1")
             .output()
             .unwrap()
     }
@@ -67,7 +70,7 @@ fn menu_install_adds_one_entry_that_runs_this_binary() {
     assert_eq!(text.matches("name:").count(), 1, "{text}");
     assert!(text.contains("rclone…"), "{text}");
     assert!(text.contains("--menu %F"), "{text}");
-    assert!(text.contains("cosmic-rclone-ui"), "{text}");
+    assert!(text.contains("rclone-shell-ext-cosmic"), "{text}");
 }
 
 #[test]
@@ -117,27 +120,4 @@ fn menu_install_replaces_prototype_entries() {
 fn menu_remove_with_nothing_installed_is_harmless() {
     let sb = Sandbox::new("noop");
     assert!(sb.run(&["--menu-remove"]).status.success());
-}
-
-#[test]
-fn share_url_refuses_paths_outside_the_mount() {
-    let sb = Sandbox::new("outside");
-    let out = sb.run(&["--share-url", "/definitely/not/in/the/mount"]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        stderr(&out).contains("Not inside the rclone mount"),
-        "{}",
-        stderr(&out)
-    );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
-}
-
-#[test]
-fn share_url_reports_an_unmounted_remote() {
-    let sb = Sandbox::new("unmounted");
-    // Inside the default mount path (~/GoogleDrive), which is not an rclone mount here.
-    let path = sb.home.join("GoogleDrive/file.txt");
-    let out = sb.run(&["--share-url", path.to_str().unwrap()]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("not mounted"), "{}", stderr(&out));
 }

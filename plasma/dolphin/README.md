@@ -1,6 +1,6 @@
-# rclone-plasma Dolphin plugins
+# rclone-shell-ext Dolphin plugins
 
-Two KF6 plugins that talk to the rclone-plasma daemon over the session bus
+Two KF6 plugins that talk to the rclone-shell-ext-plasma daemon over the session bus
 (see `../docs/dbus-interface.md`):
 
 - `rcloneoverlayplugin` (`kf6/overlayicon`): sync-state emblems on files in the mount.
@@ -20,5 +20,5 @@ Requires Qt 6, KF6 (KIO, CoreAddons, I18n) and extra-cmake-modules, e.g. on Fedo
     sudo cmake --install build
 
 Plugins install to `<prefix>/lib64/qt6/plugins/kf6/{overlayicon,kfileitemaction}`.
-Restart Dolphin (`kquitapp6 dolphin`) afterwards. The `rclone-plasma` binary must
+Restart Dolphin (`kquitapp6 dolphin`) afterwards. The `rclone-shell-ext-plasma` binary must
 be on `PATH`, and the icons `rclone-plasma` and `rclone-plasma-emblem-*` installed.

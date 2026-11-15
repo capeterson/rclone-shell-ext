@@ -5,7 +5,7 @@
 #include <KFileItemListProperties>
 #ifdef RCLONE_NO_KI18N
 #include <QCoreApplication>
-#define i18n(s) QCoreApplication::translate("rclone-plasma", s)
+#define i18n(s) QCoreApplication::translate("rclone-shell-ext", s)
 #else
 #include <KLocalizedString>
 #endif
@@ -27,7 +27,7 @@ namespace
 {
 void launch(const QStringList &args)
 {
-    QProcess::startDetached(QStringLiteral("rclone-plasma"), args);
+    QProcess::startDetached(QStringLiteral("rclone-shell-ext-plasma"), args);
 }
 
 // Dolphin creates a fresh KFileItemActions (and so a fresh instance of this plugin) for every

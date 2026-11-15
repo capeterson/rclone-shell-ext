@@ -9,7 +9,7 @@
 #include <functional>
 
 /**
- * Async wrapper around the rclone-plasma daemon's session-bus interface.
+ * Async wrapper around the rclone-shell-ext-plasma daemon's session-bus interface.
  * Never blocks: every call is a QDBusPendingCall. After an error, further calls
  * are suppressed for 10 s so a missing daemon is not hammered (or autostart-spammed).
  */

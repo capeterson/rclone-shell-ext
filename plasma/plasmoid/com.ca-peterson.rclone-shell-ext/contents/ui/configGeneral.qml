@@ -20,9 +20,9 @@ KCM.SimpleKCM {
 
     function bus(member, args, ok, fail) {
         DBus.SessionBus.asyncCall({
-            service: "com.ca-peterson.RclonePlasma",
-            path: "/com/ca_peterson/RclonePlasma",
-            iface: "com.ca_peterson.RclonePlasma1",
+            service: "com.ca-peterson.rclone-shell-ext",
+            path: "/com/ca_peterson/rclone_shell_ext",
+            iface: "com.ca_peterson.RcloneShellExt1",
             member: member, arguments: args || []
         }, function (reply) {
             if (Array.isArray(reply)) reply = reply[0];

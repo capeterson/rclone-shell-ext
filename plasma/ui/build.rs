@@ -3,9 +3,9 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
 fn main() {
     // The QML files are compiled into the library and registered as the module
-    // `com.ca_peterson.RclonePlasma` (loaded from `qrc:/qt/qml/com/ca_peterson/RclonePlasma/`).
+    // `com.ca_peterson.RcloneShellExt` (loaded from `qrc:/qt/qml/com/ca_peterson/RcloneShellExt/`).
     CxxQtBuilder::new_qml_module(
-        QmlModule::new("com.ca_peterson.RclonePlasma")
+        QmlModule::new("com.ca_peterson.RcloneShellExt")
             .qml_files(["qml/Details.qml", "qml/Settings.qml"]),
     )
     .qt_module("Gui")

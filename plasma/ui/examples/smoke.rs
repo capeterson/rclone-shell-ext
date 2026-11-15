@@ -3,14 +3,12 @@
 use rclone_ui_core::identity::{set_identity, Identity};
 
 fn main() {
-    set_identity(Identity {
-        slug: "rclone-plasma",
-        app_id: "com.ca-peterson.RclonePlasma",
-    });
+    set_identity(Identity::RELEASE);
+    rclone_ui_core::config::install_default_store();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
-        Some("--menu") => rclone_plasma_ui::run_details(&args[1..]),
-        Some("--settings") => rclone_plasma_ui::run_settings(),
+        Some("--menu") => rclone_shell_ext_plasma_ui::run_details(&args[1..]),
+        Some("--settings") => rclone_shell_ext_plasma_ui::run_settings(),
         _ => {
             eprintln!("usage: smoke --menu PATH... | --settings");
             2

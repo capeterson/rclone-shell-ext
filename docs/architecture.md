@@ -41,8 +41,14 @@ Both front ends share **one identity** and therefore one set of state on a machi
 | Icons | app `com.ca-peterson.rclone-shell-ext[-symbolic]`, status `rclone-shell-ext-<state>`, emblems `rclone-shell-ext-emblem-<state>` |
 
 `core::identity` has **no default**: calling `identity()` before `set_identity()` panics with a
-clear message (tests use a helper that sets a test identity). The identity constants live in
-`core::identity::{APP_ID, SLUG, DEV_APP_ID, DEV_SLUG}` so no front end spells them itself.
+clear message. Tests: `core`'s own unit tests get the release identity automatically; other
+crates call `identity::use_test_identity()` or enable core's `test-identity` feature from
+`[dev-dependencies]`. The identity constants live in
+`core::identity::{APP_ID, SLUG, DEV_APP_ID, DEV_SLUG}` (plus the `*_DESKTOP_ID`s) so no front end
+spells them itself. A dev build is made with `APP_ID_OVERRIDE=com.ca-peterson.rclone-shell-ext-dev`
+(`Identity::from_override`); its COSMIC desktop id is `com.ca-peterson.rclone-shell-ext-dev.Cosmic`
+and its units run the `rclone-shell-ext-dev` binary: the units always `ExecStart` the sibling of
+the running executable named after the slug (else `PATH`), see `core::units::shared_exe`.
 
 Config is one TOML file both shells read and write (atomic replace). Front ends that need live
 updates watch the file (mtime poll is fine; the Plasma daemon already polls every 2 s).
@@ -69,6 +75,14 @@ abort before the first mutation, leave the old install untouched, and report thr
 `rclone-shell-ext --migrate --dry-run`. Everything takes injected roots (XDG dirs, a
 `systemctl` runner) and is tested against temp dirs; it is never exercised against `$HOME`
 in tests or by agents.
+
+Implementation notes: `rclone-shell-ext-cli`'s `startup(args)` (called by every binary) runs
+`run_if_needed`, except in the unit modes (the migration stops those very units) and for
+`--migrate` itself; `RCLONE_SHELL_EXT_NO_MIGRATE` switches it off for tests that run binaries, and
+a lock file keeps two binaries starting together from both migrating. The old config files
+(`rclone-plasmarc`, the cosmic-config directory) are left in place. If both old installs have
+offline folders and both keepers are enabled, it is ambiguous and the migration aborts. Steps are
+idempotent, so an interrupted run resumes when run again.
 
 ## UI text (string externalization)
 

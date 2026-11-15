@@ -83,7 +83,7 @@ struct OfflineSnapshot {
 /// Re-read the settings and the keeper's report, and measure the folder's local copy while it
 /// is downloading or synced (it's cheap: a walk of local metadata).
 fn offline_snapshot(path: &str) -> OfflineSnapshot {
-    let cfg = Config::load(crate::APP_ID);
+    let cfg = Config::load();
     let state = OfflineState::load();
     let usage = share::remote_path(&expand(&cfg.mount_path), Path::new(path))
         .and_then(|rel| pin::covering_pin(&cfg.pins, &rel).map(str::to_string))
@@ -260,7 +260,7 @@ impl cosmic::Application for Menu {
             Message::OfflineSet(r) => match r {
                 Ok(_) => {
                     self.offline_error = None;
-                    self.cfg = Config::load(crate::APP_ID);
+                    self.cfg = Config::load();
                     return self.update(Message::OfflineTick);
                 }
                 Err(e) => self.offline_error = Some(e),
