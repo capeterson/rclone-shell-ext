@@ -1,0 +1,19 @@
+[package]
+name = "rclone-shell-ext"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "The shared rclone-shell-ext command line: offline-folder keeper and pin units, status, sharing, migration"
+
+[lib]
+name = "rclone_shell_ext_cli"
+
+[[bin]]
+name = "rclone-shell-ext"
+path = "src/main.rs"
+
+[dependencies]
+rclone-ui-core.workspace = true
+
+[lints]
+workspace = true

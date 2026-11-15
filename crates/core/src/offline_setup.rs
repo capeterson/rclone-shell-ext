@@ -227,7 +227,10 @@ mod tests {
         let fuse = &items[0].1;
         assert!(fuse.contains("administrator password"), "{fuse}");
         assert!(
-            fuse.contains("/etc/fuse.conf.cosmic-rclone-ui-<date-time>.bak"),
+            fuse.contains(&format!(
+                "/etc/fuse.conf.{}-<date-time>.bak",
+                crate::identity::identity().slug
+            )),
             "{fuse}"
         );
         assert!(items[2]

@@ -1,30 +1,72 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The systemd user units behind offline folders, written and removed by the app:
 //!
-//! - `<app>-offline.service`: the keeper (`--offline-keeper`), started with the main mount;
-//! - `<app>-pin@<id>.service`: one in-place mount per offline folder (`--pin-mount <id>`);
+//! - `<slug>-offline.service`: the keeper (`--offline-keeper`), started with the main mount;
+//! - `<slug>-pin@<id>.service`: one in-place mount per offline folder (`--pin-mount <id>`);
 //! - a drop-in for the main mount's unit that adds `--allow-other` (so folders can be mounted
 //!   inside it), `--default-permissions` and a `077` umask (so other users still can't get in).
 //!
-//! All are bound to the main mount's unit, so they start and stop with it.
+//! All are bound to the main mount's unit, so they start and stop with it. Every unit runs the
+//! shared `rclone-shell-ext` binary (see [`shared_exe`]), whichever front end installed it.
 
-use crate::config::{expand, Config};
+use crate::config::Config;
 use crate::pin::app_dir_name;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn unit_dir() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map_or_else(|| PathBuf::from(expand("~/.config")), PathBuf::from)
-        .join("systemd/user")
+    unit_dir_in(&crate::config::xdg_config_home())
+}
+
+/// The systemd user unit directory under `config_home`.
+pub fn unit_dir_in(config_home: &Path) -> PathBuf {
+    config_home.join("systemd/user")
+}
+
+/// The path of the shared binary the units run: the sibling of the running executable named
+/// after the slug (`rclone-shell-ext`, or `-dev`), else the first match on `PATH`.
+pub fn shared_exe() -> Result<PathBuf, String> {
+    let cur = std::env::current_exe().map_err(|e| e.to_string())?;
+    resolve_shared_exe(
+        &cur,
+        crate::identity::identity().slug,
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+/// [`shared_exe`] with its inputs spelled out: the running executable, the binary's name and
+/// the value of `PATH`.
+pub fn resolve_shared_exe(
+    cur_exe: &Path,
+    name: &str,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    let is_file = |p: &Path| p.is_file();
+    if let Some(sibling) = cur_exe.parent().map(|d| d.join(name)) {
+        if is_file(&sibling) {
+            return Ok(sibling);
+        }
+    }
+    if let Some(found) = path_var
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .map(|d| d.join(name))
+        .find(|p| is_file(p))
+    {
+        return Ok(found);
+    }
+    Err(format!(
+        "can't find the `{name}` program: it isn't next to {} or on PATH",
+        cur_exe.display()
+    ))
 }
 
 pub fn keeper_unit_name() -> String {
     format!("{}-offline.service", app_dir_name())
 }
 
-fn pin_template_name() -> String {
+/// The pin unit template's file name (`<slug>-pin@.service`).
+pub fn pin_template_name() -> String {
     format!("{}-pin@.service", app_dir_name())
 }
 
@@ -33,7 +75,12 @@ pub fn pin_unit_name(id: &str) -> String {
 }
 
 pub fn dropin_path(service: &str) -> PathBuf {
-    unit_dir()
+    dropin_path_in(&unit_dir(), service)
+}
+
+/// The drop-in's path inside the unit directory `unit_dir`.
+pub fn dropin_path_in(unit_dir: &Path, service: &str) -> PathBuf {
+    unit_dir
         .join(format!("{service}.d"))
         .join(format!("50-{}.conf", app_dir_name()))
 }
@@ -139,7 +186,7 @@ pub fn is_active(unit: &str) -> bool {
 
 /// Are the unit files and the drop-in in place with today's contents?
 pub fn installed(cfg: &Config) -> bool {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = shared_exe() else {
         return false;
     };
     let exe = exe.to_string_lossy();
@@ -155,7 +202,7 @@ pub fn installed(cfg: &Config) -> bool {
 
 /// Write the units and the drop-in, and enable and start the keeper.
 pub fn install(cfg: &Config) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = shared_exe()?;
     let exe = exe.to_string_lossy();
     let io = |e: std::io::Error| e.to_string();
     let mut changed = write_if_changed(
@@ -240,6 +287,34 @@ mod tests {
         assert!(
             dropin_path("m.service").ends_with(format!("m.service.d/50-{}.conf", app_dir_name()))
         );
+    }
+
+    #[test]
+    fn shared_exe_prefers_the_sibling_then_path() {
+        let dir = std::env::temp_dir().join(format!("rcs-exe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (bin, other) = (dir.join("bin"), dir.join("other"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let cur = bin.join("front-end");
+        let path = std::env::join_paths([&other]).unwrap();
+        // Nothing anywhere: an error naming the program.
+        let err = resolve_shared_exe(&cur, "rse", Some(&path)).unwrap_err();
+        assert!(err.contains("`rse`"), "{err}");
+        // On PATH only.
+        std::fs::write(other.join("rse"), "").unwrap();
+        assert_eq!(
+            resolve_shared_exe(&cur, "rse", Some(&path)).unwrap(),
+            other.join("rse")
+        );
+        // A sibling wins over PATH.
+        std::fs::write(bin.join("rse"), "").unwrap();
+        assert_eq!(
+            resolve_shared_exe(&cur, "rse", Some(&path)).unwrap(),
+            bin.join("rse")
+        );
+        assert!(resolve_shared_exe(&cur, "nope", None).is_err());
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

@@ -12,8 +12,8 @@ ci: core
 # Toolkit-free crates: format, lint, test
 core:
     cargo fmt --all --check
-    cargo clippy -p rclone-ui-core --all-targets --locked -- -D warnings
-    cargo test -p rclone-ui-core --locked
+    cargo clippy -p rclone-ui-core -p rclone-shell-ext --all-targets --locked -- -D warnings
+    cargo test -p rclone-ui-core -p rclone-shell-ext --locked
 
 # Tests that run against the installed rclone, to catch behaviour that changes between its
 # releases (start a throwaway `rclone rcd` for them)
