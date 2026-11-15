@@ -9,6 +9,18 @@ Clicking a file opens its details window (see below). Files get the same type ic
 Status is read from rclone's remote-control API (`--rc`: `core/stats`, `vfs/stats` and
 `core/transferred`) plus `systemctl --user` and `/proc/mounts`.
 
+
+## Repository layout
+
+This is a monorepo (work in progress, see `docs/architecture.md`):
+
+- `crates/core`: toolkit-free rclone logic shared by every front end.
+- `cosmic/`: the COSMIC panel applet (`cosmic-rclone-ui`).
+- `plasma/`: the KDE Plasma front end (`daemon/`, `ui/`, `plasmoid/`, `dolphin/`).
+- `resources/`: shared SVG assets.
+
+Run `just --list` for the build, test and install recipes (`just cosmic::...`, `just plasma::...`).
+
 ## Requirements
 
 - COSMIC desktop, Rust toolchain, and libcosmic's system dev libraries
