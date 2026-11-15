@@ -9,11 +9,11 @@ ci: core
     just cosmic::ci
     just plasma::ci
 
-# Toolkit-free crates: format, lint, test
+# Toolkit-free crates (CI `fmt` + `core` jobs): format, lint, test
 core:
     cargo fmt --all --check
-    cargo clippy -p rclone-ui-core --all-targets --locked -- -D warnings
-    cargo test -p rclone-ui-core --locked
+    cargo clippy -p rclone-ui-core -p rclone-ui-i18n -p rclone-ui-view -p rclone-shell-ext --all-targets --locked -- -D warnings
+    cargo test -p rclone-ui-core -p rclone-ui-i18n -p rclone-ui-view -p rclone-shell-ext --locked
 
 # Tests that run against the installed rclone, to catch behaviour that changes between its
 # releases (start a throwaway `rclone rcd` for them)
