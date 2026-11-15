@@ -66,7 +66,7 @@ mod tests {
     /// The README must state the same minimum the code enforces.
     #[test]
     fn readme_states_the_minimum() {
-        let readme = include_str!("../../README.md");
+        let readme = include_str!("../../../README.md");
         assert!(
             readme.contains(&format!("rclone {MIN_RCLONE} or newer")),
             "README.md must say \"rclone {MIN_RCLONE} or newer\" (see src/version.rs)"

@@ -1,0 +1,20 @@
+[package]
+name = "cosmic-rclone-ui"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "COSMIC panel applet showing rclone mount and upload status"
+
+[dependencies]
+jiff.workspace = true
+rclone-ui-core.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = ["applet", "dbus-config", "multi-window", "tokio", "wayland", "winit"]
+
+[lints]
+workspace = true

@@ -122,20 +122,20 @@ impl AppModel {
     }
 }
 
-const LOADING_SVG: &[u8] = include_bytes!("../resources/emblems/loading.svg");
+const LOADING_SVG: &[u8] = include_bytes!("../../resources/emblems/loading.svg");
 
 /// The emblem for each health state.
 fn health_svg(h: Health) -> &'static [u8] {
     match h {
-        Health::Healthy => include_bytes!("../resources/emblems/synced.svg"),
-        Health::Uploading => include_bytes!("../resources/emblems/uploading.svg"),
-        Health::Downloading => include_bytes!("../resources/emblems/downloading.svg"),
-        Health::Transferring => include_bytes!("../resources/emblems/transferring.svg"),
-        Health::FileErrors => include_bytes!("../resources/emblems/error.svg"),
-        Health::CacheFull => include_bytes!("../resources/emblems/full.svg"),
-        Health::Unreachable => include_bytes!("../resources/emblems/unreachable.svg"),
-        Health::NotMounted => include_bytes!("../resources/emblems/unmounted.svg"),
-        Health::ServiceStopped => include_bytes!("../resources/emblems/stopped.svg"),
+        Health::Healthy => include_bytes!("../../resources/emblems/synced.svg"),
+        Health::Uploading => include_bytes!("../../resources/emblems/uploading.svg"),
+        Health::Downloading => include_bytes!("../../resources/emblems/downloading.svg"),
+        Health::Transferring => include_bytes!("../../resources/emblems/transferring.svg"),
+        Health::FileErrors => include_bytes!("../../resources/emblems/error.svg"),
+        Health::CacheFull => include_bytes!("../../resources/emblems/full.svg"),
+        Health::Unreachable => include_bytes!("../../resources/emblems/unreachable.svg"),
+        Health::NotMounted => include_bytes!("../../resources/emblems/unmounted.svg"),
+        Health::ServiceStopped => include_bytes!("../../resources/emblems/stopped.svg"),
     }
 }
 
@@ -368,13 +368,13 @@ fn recent_row(t: &CompletedTransfer, now: jiff::Timestamp, detailed: bool) -> El
     }
     if let Some(dir) = t.direction {
         let svg: &'static [u8] = match dir {
-            Direction::Upload => include_bytes!("../resources/emblems/uploading.svg"),
-            Direction::Download => include_bytes!("../resources/emblems/downloading.svg"),
+            Direction::Upload => include_bytes!("../../resources/emblems/uploading.svg"),
+            Direction::Download => include_bytes!("../../resources/emblems/downloading.svg"),
         };
         row = row.push(with_tip(emblem(svg), direction_tip(dir, t.kind)));
     }
     if t.error.is_some() {
-        row = row.push(emblem(include_bytes!("../resources/emblems/error.svg")));
+        row = row.push(emblem(include_bytes!("../../resources/emblems/error.svg")));
     }
     widget::button::custom(row)
         // A deleted file has no details to show.

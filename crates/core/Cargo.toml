@@ -1,0 +1,21 @@
+[package]
+name = "rclone-ui-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Toolkit-free rclone status, offline-folder and setup logic shared by the rclone UI front ends"
+
+[lib]
+name = "rclone_ui_core"
+
+[dependencies]
+base64 = "0.22"
+jiff.workspace = true
+mime_guess = "2"
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2", features = ["json"] }
+xdg-mime = "0.4"
+
+[lints]
+workspace = true

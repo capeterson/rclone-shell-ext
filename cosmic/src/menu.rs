@@ -367,9 +367,9 @@ impl Menu {
         let turns = self.now.duration_since(self.started).as_secs_f32() / SPIN_PERIOD.as_secs_f32();
         let angle = turns.fract() * std::f32::consts::TAU;
         let spinner = cosmic::iced::widget::stack![
-            layer(include_bytes!("../resources/loading/ring.svg"))
+            layer(include_bytes!("../../resources/loading/ring.svg"))
                 .rotation(Rotation::Floating(Radians(angle))),
-            layer(include_bytes!("../resources/loading/cloud.svg")),
+            layer(include_bytes!("../../resources/loading/cloud.svg")),
         ]
         .width(Length::Fixed(f32::from(SPINNER_SIZE)))
         .height(Length::Fixed(f32::from(SPINNER_SIZE)));
