@@ -17,7 +17,7 @@ This is the single contract between the Rust daemon (`rclone-plasma --daemon`), 
 
 `Health` values, in `rc::Health` order: `ServiceStopped`, `NotMounted`, `Unreachable`, `CacheFull`, `FileErrors`, `Uploading`, `Downloading`, `Transferring`, `Healthy`. Before the first poll it is `Loading`.
 
-Each value maps to an installed icon named `rclone-plasma-<kebab>`: `rclone-plasma-stopped`, `-unmounted`, `-unreachable`, `-full`, `-error`, `-uploading`, `-downloading`, `-transferring`, `-synced`, and `-loading`. These come from upstream `resources/emblems/*.svg`.
+Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-shell-ext-stopped`, `-unmounted`, `-unreachable`, `-full`, `-error`, `-uploading`, `-downloading`, `-transferring`, `-synced`, and `-loading`. These are installed from `resources/emblems/<kebab>.svg`.
 
 ## Methods
 
@@ -85,11 +85,11 @@ Each path maps from `status::SyncState` to emblems as follows:
 
 | SyncState | Emblem |
 |---|---|
-| InSync | `rclone-plasma-emblem-synced` |
-| OnlineOnly | `rclone-plasma-emblem-online` |
-| PartlyCached | `rclone-plasma-emblem-partial` |
-| Uploading, QueuedUpload, LocalNewer | `rclone-plasma-emblem-uploading` |
-| Downloading, DriveNewer | `rclone-plasma-emblem-downloading` |
+| InSync | `rclone-shell-ext-emblem-synced` |
+| OnlineOnly | `rclone-shell-ext-emblem-online` |
+| PartlyCached | `rclone-shell-ext-emblem-partial` |
+| Uploading, QueuedUpload, LocalNewer | `rclone-shell-ext-emblem-uploading` |
+| Downloading, DriveNewer | `rclone-shell-ext-emblem-downloading` |
 | Differs | `emblem-warning` |
 
-Pinned offline folders, and every path inside them, also get `rclone-plasma-emblem-offline`. A pin in phase `Attention` gets `emblem-error` instead.
+Pinned offline folders, and every path inside them, also get `rclone-shell-ext-emblem-offline`. A pin in phase `Attention` gets `emblem-error` instead.
