@@ -2,6 +2,9 @@ name := 'cosmic-rclone-ui'
 appid := 'com.ca-peterson.CosmicRcloneUi'
 # Recipes run in this directory; the workspace target dir is one level up.
 target := '../target'
+# The one copy of the SVGs lives at the repo root.
+icon := 'com.ca-peterson.rclone-shell-ext-symbolic'
+old_icon := 'com.ca-peterson.CosmicRcloneUi-symbolic'
 
 default: build-release
 
@@ -27,11 +30,11 @@ status:
 install-user: build-release
     install -Dm0755 {{target}}/release/{{name}} ~/.local/bin/{{name}}
     install -Dm0644 resources/{{appid}}.desktop ~/.local/share/applications/{{appid}}.desktop
-    install -Dm0644 resources/icons/hicolor/scalable/apps/{{appid}}-symbolic.svg ~/.local/share/icons/hicolor/scalable/apps/{{appid}}-symbolic.svg
+    install -Dm0644 ../resources/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg
 
 uninstall-user:
     if [ -x ~/.local/bin/{{name}} ]; then ~/.local/bin/{{name}} --offline-remove; fi
-    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{appid}}-symbolic.svg
+    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{old_icon}}.svg
 
 devid := 'com.ca-peterson.CosmicRcloneUiDev'
 

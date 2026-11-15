@@ -5,7 +5,7 @@
         "Category": "System Information",
         "Description": "Cloud sync status and controls for rclone",
         "EnabledByDefault": true,
-        "Icon": "rclone-plasma-synced",
+        "Icon": "rclone-shell-ext-synced",
         "Id": "com.ca-peterson.rcloneplasma",
         "License": "GPL-3.0-only",
         "Name": "rclone UI",

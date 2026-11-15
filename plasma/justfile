@@ -6,6 +6,8 @@ plugindir := prefix / 'lib64/qt6/plugins'
 # Recipes run in plasma/; the workspace target dir is one level up.
 target := '../target'
 dolphin_build := target / 'dolphin'
+icon := 'com.ca-peterson.rclone-shell-ext'
+icons := prefix / 'share/icons/hicolor/scalable'
 
 default: build-release
 
@@ -22,6 +24,31 @@ ci:
     cargo clippy -p rclone-plasma -p rclone-plasma-ui --all-targets --locked -- -D warnings
     cargo test -p rclone-plasma -p rclone-plasma-ui --locked
     cmake -B {{dolphin_build}} -S dolphin && cmake --build {{dolphin_build}}
+    just --justfile {{justfile()}} lint-qml
+
+# qmllint over the Kirigami windows and the plasmoid. Syntax errors and real type errors fail;
+# imports that do not resolve (Kirigami, org.kde.plasma.*, our cxx-qt module, absent on CI) and
+# the warnings that cascade from them do not.
+lint-qml:
+    $(command -v qmllint-qt6 || command -v qmllint || echo /usr/lib64/qt6/bin/qmllint) \
+        --import disable --unqualified disable --compiler disable --unresolved-type disable \
+        --missing-type disable --missing-property disable --unresolved-alias disable \
+        --incompatible-type disable \
+        ui/qml/*.qml plasmoid/*/contents/ui/*.qml plasmoid/*/contents/config/config.qml
+
+# Install the SVGs from the repo's resources/ (the only copy) under their theme names:
+# status icons `rclone-shell-ext-<state>`, Dolphin emblems `rclone-shell-ext-emblem-<state>`.
+install-icons:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for s in stopped unmounted unreachable full error uploading downloading transferring synced loading; do
+        install -Dm0644 ../resources/emblems/$s.svg {{icons}}/status/rclone-shell-ext-$s.svg
+    done
+    for s in downloading offline online partial synced uploading; do
+        install -Dm0644 ../resources/overlay/$s.svg {{icons}}/emblems/rclone-shell-ext-emblem-$s.svg
+    done
+    install -Dm0644 ../resources/icons/hicolor/scalable/apps/{{icon}}.svg {{icons}}/apps/{{icon}}.svg
+    touch {{prefix}}/share/icons/hicolor || true
 
 # Install under ~/.local. Dolphin finds the plugins through QT_PLUGIN_PATH, which a Plasma env
 # script sets from the next login (start Dolphin with it set to test before then).
@@ -29,9 +56,8 @@ install-user: build-release
     install -Dm0755 {{target}}/release/{{name}} {{prefix}}/bin/{{name}}
     sed 's|@BINDIR@|{{prefix}}/bin|' dbus/{{appid}}.service | install -Dm0644 /dev/stdin {{prefix}}/share/dbus-1/services/{{appid}}.service
     -busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig
-    cp -r icons/hicolor/. {{prefix}}/share/icons/hicolor/
-    -touch {{prefix}}/share/icons/hicolor
-    printf '[Desktop Entry]\nName=rclone UI\nExec={{name}} --settings\nIcon={{name}}\nType=Application\nNoDisplay=true\n' | install -Dm0644 /dev/stdin {{prefix}}/share/applications/{{appid}}.desktop
+    just --justfile {{justfile()}} install-icons
+    printf '[Desktop Entry]\nName=rclone UI\nExec={{name}} --settings\nIcon={{icon}}\nType=Application\nNoDisplay=true\n' | install -Dm0644 /dev/stdin {{prefix}}/share/applications/{{appid}}.desktop
     kpackagetool6 -t Plasma/Applet -u {{plasmoid}} >/dev/null 2>&1 || kpackagetool6 -t Plasma/Applet -i {{plasmoid}}
     cmake --install {{dolphin_build}}
     printf 'export QT_PLUGIN_PATH="{{plugindir}}${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"\n' | install -Dm0644 /dev/stdin ~/.config/plasma-workspace/env/{{name}}.sh
@@ -44,4 +70,4 @@ uninstall-user:
     -kpackagetool6 -t Plasma/Applet -r com.ca-peterson.rcloneplasma
     rm -f {{prefix}}/bin/{{name}} {{prefix}}/share/dbus-1/services/{{appid}}.service {{prefix}}/share/applications/{{appid}}.desktop ~/.config/plasma-workspace/env/{{name}}.sh
     rm -f {{plugindir}}/kf6/overlayicon/rcloneoverlayplugin.so {{plugindir}}/kf6/kfileitemaction/rclonefileitemaction.so
-    find {{prefix}}/share/icons/hicolor -name 'rclone-plasma*' -delete
+    find {{prefix}}/share/icons/hicolor \( -name 'rclone-shell-ext-*' -o -name '{{icon}}.svg' -o -name 'rclone-plasma*' \) -delete

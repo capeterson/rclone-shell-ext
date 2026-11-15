@@ -21,7 +21,7 @@ PlasmoidItem {
         "Downloading": "downloading", "Transferring": "transferring",
         "Healthy": "synced", "Loading": "loading"
     })
-    readonly property string iconName: "rclone-plasma-" + (available ? (iconNames[health] || "loading") : "loading")
+    readonly property string iconName: "rclone-shell-ext-" + (available ? (iconNames[health] || "loading") : "loading")
 
     function unwrap(v) {
         if (Array.isArray(v)) v = v[0];
