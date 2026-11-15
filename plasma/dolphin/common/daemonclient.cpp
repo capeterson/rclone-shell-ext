@@ -74,18 +74,49 @@ void DaemonClient::getProperty(const QString &name, std::function<void(const QSt
     });
 }
 
+QString DaemonClient::getPropertyBlocking(const QString &name, int timeoutMs)
+{
+    if (backedOff()) {
+        return {};
+    }
+    auto msg = QDBusMessage::createMethodCall(kService, kPath, QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+    msg << kIface << name;
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(msg, QDBus::Block, timeoutMs);
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+        noteError();
+        return {};
+    }
+    return reply.arguments().first().value<QDBusVariant>().variant().toString();
+}
+
 void DaemonClient::refreshMountPath()
 {
     getProperty(QStringLiteral("MountPath"), [this](const QString &p) {
-        QString path = p;
-        while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
-            path.chop(1);
-        }
-        if (path != m_mountPath) {
-            m_mountPath = path;
-            Q_EMIT mountPathChanged(m_mountPath);
-        }
+        setMountPath(p);
     });
+}
+
+QString DaemonClient::ensureMountPath(int timeoutMs)
+{
+    if (m_mountPath.isEmpty()) {
+        const QString p = getPropertyBlocking(QStringLiteral("MountPath"), timeoutMs);
+        if (!p.isEmpty()) {
+            setMountPath(p);
+        }
+    }
+    return m_mountPath;
+}
+
+void DaemonClient::setMountPath(const QString &raw)
+{
+    QString path = raw;
+    while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
+        path.chop(1);
+    }
+    if (path != m_mountPath) {
+        m_mountPath = path;
+        Q_EMIT mountPathChanged(m_mountPath);
+    }
 }
 
 void DaemonClient::fetchStatusJson(std::function<void(const QString &)> cb)

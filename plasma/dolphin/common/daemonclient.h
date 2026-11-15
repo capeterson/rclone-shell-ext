@@ -33,6 +33,12 @@ public:
     /// Re-read MountPath asynchronously.
     void refreshMountPath();
 
+    /// Blocking property read with a short timeout, for callers that must answer synchronously
+    /// (e.g. a context-menu plugin instantiated per menu). Empty on error/timeout.
+    QString getPropertyBlocking(const QString &name, int timeoutMs);
+    /// If the mount path is unknown, fetch it with a blocking call. Returns mountPath().
+    QString ensureMountPath(int timeoutMs);
+
 Q_SIGNALS:
     void mountPathChanged(const QString &mountPath);
     void itemsChanged(const QStringList &paths);
@@ -41,6 +47,7 @@ private:
     bool backedOff() const;
     void noteError();
     void getProperty(const QString &name, std::function<void(const QString &)> cb);
+    void setMountPath(const QString &raw);
 
     QString m_mountPath;
     QDBusServiceWatcher m_watcher;
