@@ -13,7 +13,7 @@
 
 use crate::config::{expand, Config};
 use crate::conflict::{self, Remote};
-use crate::pin::{self, OfflineState, Phase, PinState, Step};
+use crate::pin::{self, OfflineState, Phase, PinError, PinState, Step};
 use crate::rc::{self, ChangeKind, Direction};
 use crate::units;
 use rclone_ui_i18n::fl;
@@ -459,7 +459,7 @@ enum Failure {
     /// A previous run was cut off and left its lock behind.
     StaleLock(PathBuf),
     /// Stop until the user looks.
-    Attention(String),
+    Attention(PinError),
 }
 
 fn classify(err: &str) -> Failure {
@@ -467,7 +467,7 @@ fn classify(err: &str) -> Failure {
     if e.contains("cannot find prior path1 or path2 listings") {
         Failure::NeedsResync
     } else if e.contains("empty current path") {
-        Failure::Attention(fl!("offline-err-one-side-empty"))
+        Failure::Attention(PinError::OneSideEmpty)
     } else if e.contains("filters") && e.contains("resync") {
         // The filters changed since the baseline was made.
         Failure::NeedsResync
@@ -477,11 +477,11 @@ fn classify(err: &str) -> Failure {
             lock.lines().next().unwrap_or_default().trim(),
         ))
     } else if e.contains(FOLDER_REPLACED) {
-        Failure::Attention(fl!("offline-err-folder-replaced"))
+        Failure::Attention(PinError::FolderReplaced)
     } else if e.contains("directory not found") {
-        Failure::Attention(fl!("offline-err-cloud-folder-missing"))
+        Failure::Attention(PinError::CloudFolderMissing)
     } else if e.contains("bisync aborted") || e.contains("must run --resync") {
-        Failure::Attention(fl!("offline-err-sync-stopped"))
+        Failure::Attention(PinError::SyncStopped)
     } else {
         Failure::Retry(err.to_string())
     }
@@ -530,11 +530,6 @@ struct Keeper {
     state: OfflineState,
     /// Fingerprint of each local copy right after its last successful sync.
     synced_print: HashMap<String, u64>,
-}
-
-/// Shown when the folder is gone from the Drive mount. Compared by value to clear the warning.
-fn folder_missing() -> String {
-    fl!("offline-err-mount-folder-missing")
 }
 
 fn repair_dir() -> PathBuf {
@@ -766,7 +761,7 @@ impl Keeper {
     fn failed(&mut self, rel: &str, err: &str, was_resync: bool) {
         let p = self.pin(rel);
         p.failures += 1;
-        p.error = Some(err.to_string());
+        p.error = Some(PinError::Other(err.to_string()));
         match classify(err) {
             Failure::NeedsResync if !was_resync => {
                 // Safe to do without asking: a resync only copies, never deletes.
@@ -790,7 +785,7 @@ impl Keeper {
                 let p = self.pin(rel);
                 p.phase = Phase::Attention;
                 p.error = Some(why.clone());
-                desktop_notify(&format!("{rel}: {why}"));
+                desktop_notify(&format!("{rel}: {}", why.label()));
             }
             Failure::Retry(_) | Failure::NeedsResync => {
                 let p = self.pin(rel);
@@ -826,7 +821,7 @@ impl Keeper {
             self.state.notice(at, rel, t.clone());
         }
         desktop_notify(&if texts.len() == 1 {
-            texts[0].clone()
+            texts[0].label()
         } else {
             fl!(
                 "offline-notify-conflicts-resolved",
@@ -849,18 +844,18 @@ impl Keeper {
             let p = self.pin(rel);
             if p.phase != Phase::Attention {
                 p.phase = Phase::Attention;
-                p.error = Some(folder_missing());
+                p.error = Some(PinError::FolderMissing);
             }
             return;
         }
         // The folder is back (e.g. a flag from an earlier boot-time race): clear that warning.
         let p = self.pin(rel);
-        if p.phase == Phase::Attention && p.error.as_deref() == Some(folder_missing().as_str()) {
+        if p.phase == Phase::Attention && matches!(p.error, Some(PinError::FolderMissing)) {
             p.phase = Phase::Ready;
             p.error = None;
         }
         if let Err(e) = units::systemctl(&["start", &units::pin_unit_name(&pin::pin_id(rel))]) {
-            self.pin(rel).error = Some(fl!("offline-err-mount-in-place", error = e));
+            self.pin(rel).error = Some(PinError::MountInPlace { error: e });
         }
     }
 
@@ -870,7 +865,7 @@ impl Keeper {
         self.pin(rel).phase = Phase::Removing;
         if initialized && local.is_dir() {
             if !online {
-                self.pin(rel).error = Some(fl!("offline-err-waiting-to-upload"));
+                self.pin(rel).error = Some(PinError::WaitingToUpload);
                 return;
             }
             let pushed = match self.remote_for(rel) {
@@ -878,19 +873,21 @@ impl Keeper {
                 Err(e) => Err(e),
             };
             if let Err(e) = pushed {
-                self.pin(rel).error = Some(fl!("offline-err-upload-last", error = e));
+                self.pin(rel).error = Some(PinError::UploadLast { error: e });
                 return;
             }
         }
         let unit = units::pin_unit_name(&pin::pin_id(rel));
         let _ = units::systemctl(&["stop", &unit]);
         if pin_is_mounted(&self.cfg, rel) {
-            self.pin(rel).error = Some(fl!("offline-err-files-open"));
+            self.pin(rel).error = Some(PinError::FilesOpen);
             return;
         }
         let gone = remove_local(rel);
         if let Err(e) = gone {
-            self.pin(rel).error = Some(fl!("offline-err-delete-local", error = e.to_string()));
+            self.pin(rel).error = Some(PinError::DeleteLocal {
+                error: e.to_string(),
+            });
             return;
         }
         self.synced_print.remove(rel);

@@ -103,7 +103,13 @@ offline-folders-count = { $count ->
 }
 offline-summary-none = No folders kept offline
 offline-summary-all-ready = { $folders } · all available offline
-offline-summary-phase = { $folders } · { $phase }
+offline-summary-phase = { $folders } · { $phase ->
+    [downloading] downloading for offline use
+    [waiting] waiting to sync
+    [attention] needs attention
+    [removing] removing offline copy
+   *[ready] available offline
+}
 
 offline-step-fuse-title = Allow mounts inside the Drive folder
 offline-step-fuse-detail = Adds user_allow_other to /etc/fuse.conf. Asks for an administrator password once.
@@ -160,6 +166,7 @@ offline-err-mount-in-place = Couldn't mount the offline copy in place: { $error 
 offline-err-waiting-to-upload = Waiting for a connection to upload the last changes
 offline-err-upload-last = Couldn't upload the last changes: { $error }
 offline-err-files-open = Files in the folder are still open
+offline-err-no-network = no network
 offline-err-delete-local = Couldn't delete the local copy: { $error }
 offline-err-cloud-lookup = Couldn't look up the cloud folder: { $error }
 offline-notify-title = Offline folders

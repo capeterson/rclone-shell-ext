@@ -180,8 +180,8 @@ fn offline_cli(args: &[String]) -> Option<i32> {
                     "  {rel}: {}{}",
                     p.phase.label(),
                     p.error
-                        .as_deref()
-                        .map(|e| format!(" ({e})"))
+                        .as_ref()
+                        .map(|e| format!(" ({})", e.label()))
                         .unwrap_or_default()
                 ),
                 None => println!("  {rel}: waiting for the keeper"),

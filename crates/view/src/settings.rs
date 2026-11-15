@@ -8,7 +8,7 @@
 use crate::ago;
 use rclone_ui_core::config::Config;
 use rclone_ui_core::offline_setup::{consent_items, setup_steps, Checks};
-use rclone_ui_core::pin::{self, OfflineState, Phase};
+use rclone_ui_core::pin::{self, OfflineState, Phase, PinError};
 use rclone_ui_i18n::fl;
 use serde_json::json;
 
@@ -195,7 +195,9 @@ impl SettingsState {
                     phase: phase.label(),
                     icon: phase.icon().to_string(),
                     label,
-                    error: p.and_then(|p| p.error.clone()).unwrap_or_default(),
+                    error: p
+                        .and_then(|p| p.error.as_ref().map(PinError::label))
+                        .unwrap_or_default(),
                     can_repair: phase == Phase::Attention,
                     removing: false,
                 }
@@ -212,7 +214,7 @@ impl SettingsState {
                     phase: Phase::Removing.label(),
                     icon: Phase::Removing.icon().to_string(),
                     label: Phase::Removing.label(),
-                    error: p.error.clone().unwrap_or_default(),
+                    error: p.error.as_ref().map(PinError::label).unwrap_or_default(),
                     can_repair: false,
                     removing: true,
                 }),
@@ -230,7 +232,7 @@ impl SettingsState {
             .iter()
             .rev()
             .take(5)
-            .map(|n| (n.text.clone(), ago(now, n.at)))
+            .map(|n| (n.text.label(), ago(now, n.at)))
             .collect()
     }
 
@@ -309,7 +311,7 @@ pub struct SettingsView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rclone_ui_core::pin::{Notice, PinState};
+    use rclone_ui_core::pin::{Notice, NoticeText, PinState};
 
     fn state() -> SettingsState {
         SettingsState::new(Config::default())
@@ -460,7 +462,7 @@ mod tests {
         s.cfg.offline_enabled = true;
         s.cfg.pins = vec!["a".into(), "b".into(), "c".into()];
         s.state.pins.push(PinState {
-            error: Some("boom".into()),
+            error: Some(PinError::Other("boom".into())),
             ..pinned("a", Phase::Attention)
         });
         s.state.pins.push(PinState {
@@ -489,7 +491,7 @@ mod tests {
         s.cfg.pins = vec!["a".into()];
         s.state.pins.push(pinned("a", Phase::Ready));
         s.state.pins.push(PinState {
-            error: Some("busy".into()),
+            error: Some(PinError::Other("busy".into())),
             ..pinned("gone", Phase::Removing)
         });
         let rows = s.pin_rows(0);
@@ -510,7 +512,7 @@ mod tests {
             s.state.notices.push(Notice {
                 at: i,
                 rel: "d".into(),
-                text: format!("n{i}"),
+                text: NoticeText::Other(format!("n{i}")),
             });
         }
         let n = s.notices(7);

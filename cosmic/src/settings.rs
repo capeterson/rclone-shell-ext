@@ -360,9 +360,9 @@ impl App {
             .iter()
             .filter(|p| !self.cfg.pins.contains(&p.rel))
         {
-            let desc = p.error.as_deref().map_or_else(
+            let desc = p.error.as_ref().map_or_else(
                 || Phase::Removing.label(),
-                |e| format!("{}\n{e}", Phase::Removing.label()),
+                |e| format!("{}\n{}", Phase::Removing.label(), e.label()),
             );
             sec = sec.add(
                 settings::item::builder(p.rel.as_str())
@@ -380,7 +380,7 @@ impl App {
         for n in self.state.notices.iter().rev().take(5) {
             let when = crate::app::ago(now, jiff::Timestamp::from_second(n.at).ok());
             sec = sec.add(
-                settings::item::builder(n.text.as_str())
+                settings::item::builder(n.text.label())
                     .description(when)
                     .control(widget::Space::new()),
             );
