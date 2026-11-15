@@ -63,7 +63,8 @@ jobs:
           if [ "$EVENT" != pull_request ] || [ "$SHARED" = true ]; then
             printf '%s\n' core=true cosmic=true plasma=true >> "$GITHUB_OUTPUT"
           else
-            echo "core=false" >> "$GITHUB_OUTPUT"
+            # core always runs: it is cheap, and its strings sync test scans cosmic/ and plasma/.
+            echo "core=true" >> "$GITHUB_OUTPUT"
             echo "cosmic=$COSMIC" >> "$GITHUB_OUTPUT"
             echo "plasma=$PLASMA" >> "$GITHUB_OUTPUT"
           fi
