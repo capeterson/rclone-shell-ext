@@ -361,7 +361,7 @@ impl App {
             .filter(|p| !self.cfg.pins.contains(&p.rel))
         {
             let desc = p.error.as_deref().map_or_else(
-                || Phase::Removing.label().to_string(),
+                || Phase::Removing.label(),
                 |e| format!("{}\n{e}", Phase::Removing.label()),
             );
             sec = sec.add(

@@ -5,7 +5,6 @@
 //! event loop and returns an exit code.
 
 mod bridge;
-pub mod logic;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 

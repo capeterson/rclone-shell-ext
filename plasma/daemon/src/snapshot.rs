@@ -142,7 +142,7 @@ fn offline_json(cfg: &Config, state: &OfflineState) -> OfflineJson {
             Some(p) => PinJson {
                 rel: rel.clone(),
                 phase: format!("{:?}", p.phase),
-                phase_label: p.phase.label().to_string(),
+                phase_label: p.phase.label(),
                 phase_icon: p.phase.icon().to_string(),
                 error: p.error.clone(),
             },
