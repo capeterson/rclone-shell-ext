@@ -93,6 +93,16 @@ for `pending()`.
   run `rclone-shell-ext --migrate`; a failure stops the recipe with the reason and leaves the old
   files (and the old plasmoid/daemon) working. Only after success are the old install's own files
   removed.
+- *Plasma panel entry, at install, with plasmashell stopped:* `--migrate` does not touch
+  `plasma-org.kde.plasma.desktop-appletsrc`, because plasmashell holds the layout in memory and
+  writes it back over any edit made while it runs. `plasma::install-user` installs the new
+  plasmoid, stops plasmashell, runs `rclone-shell-ext --plasma-panel-rename`
+  (`migrate::plasma_panel::rewrite`, which refuses while a `plasmashell` process of the user runs),
+  starts plasmashell again, and only then removes the old plasmoid package. The rewrite renames
+  `plugin=` and the old id in comma lists (de-duplicated); when a system tray already has a
+  new-id entry (plasmashell adds one when it finds the new plugin), the old tray entry is dropped
+  with its sub-groups instead. It handles both the nested tray and a separate systemtray
+  containment, and is idempotent.
 - *CLI modes:* `rclone-shell-ext-cli`'s `startup(args)` (called by every binary) runs
   `migrate::run_if_needed()` before the command-line modes that may use offline folders, except
   in the unit modes (the migration stops those very units) and for `--migrate` itself.

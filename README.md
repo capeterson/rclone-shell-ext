@@ -72,7 +72,12 @@ the units and drop-in under the new names and restarts what was enabled, and upd
 panel entry. It waits until rclone has no running sync jobs and no offline folder is mounted, and
 never deletes your data. If anything is unexpected it changes nothing, prints why, and the recipe
 stops with the old install still working. Preview it with `rclone-shell-ext --migrate --dry-run`.
-Only after it succeeds does the recipe remove the old install's files. If you skip the recipe
+Only after it succeeds does the recipe remove the old install's files.
+The Plasma recipe also renames the old widget in your panel or system tray, which `--migrate`
+does not do: plasmashell keeps the layout in memory and would write it back over a file edited
+under it, so the recipe stops plasmashell, runs `rclone-shell-ext --plasma-panel-rename`
+(`--dry-run` previews it), and starts plasmashell again. The rename refuses to run while
+plasmashell is up. You will see the panel flicker once. If you skip the recipe
 and just start a new binary, the daemon or applet does the move in the background and shows a
 banner meanwhile; offline folders can't be turned on or pinned until it is done.
 
@@ -199,6 +204,7 @@ The shared `rclone-shell-ext` binary (`rclone-shell-ext --help`, or any unrecogn
 | `--offline-repair FOLDER` | ask the keeper to rebuild a folder's sync baseline |
 | `--offline-remove` | remove the offline-folder services (refuses while folders are pinned) |
 | `--migrate [--dry-run]` | move an old `cosmic-rclone-ui` / `rclone-plasma` install over |
+| `--plasma-panel-rename [--dry-run]` | rename the old plasmoid in plasmashell's applet list (refuses while plasmashell runs) |
 | `--offline-keeper`, `--pin-mount ID`, `--pin-unmount ID` | run by the systemd units; not for typing |
 
 The front-end binaries add their own modes (`rclone-shell-ext-plasma --daemon`, `--menu PATH`,

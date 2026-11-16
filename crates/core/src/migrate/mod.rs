@@ -19,13 +19,14 @@
 //! from running again; every step is safe to repeat, so an interrupted run resumes by running
 //! again.
 
+pub mod plasma_panel;
 mod readers;
 
 pub use readers::parse_kconfig;
 
 use crate::bisync_name::flatten as flat;
 use crate::config::{self, Config, TomlStore};
-use crate::identity::{APP_ID, COSMIC_DESKTOP_ID, SLUG};
+use crate::identity::{COSMIC_DESKTOP_ID, SLUG};
 use crate::rc::RcProbeError;
 use crate::units;
 use rclone_ui_i18n::fl;
@@ -49,10 +50,6 @@ const PANEL_DIRS: [&str; 2] = [
     "com.system76.CosmicPanel.Dock",
 ];
 const PANEL_FILES: [&str; 2] = ["plugins_wings", "plugins_center"];
-/// The old Plasma plasmoid id, and the file in `$XDG_CONFIG_HOME` where plasmashell lists its
-/// applets (the panel entry and the system tray's lists).
-const OLD_PLASMOID_ID: &str = "com.ca-peterson.rcloneplasma";
-const PLASMA_APPLETSRC: &str = "plasma-org.kde.plasma.desktop-appletsrc";
 /// bisync's name for a file is limited by the file system.
 const FILE_NAME_MAX: usize = 255;
 
@@ -359,8 +356,6 @@ struct Facts {
     new_state_empty: bool,
     /// COSMIC panel config files that list the old applet, with their text.
     panels: Vec<(PathBuf, String)>,
-    /// plasmashell's applet list, if it names the old plasmoid.
-    plasma_applets: Option<PathBuf>,
     /// What an earlier, interrupted run recorded before it changed anything.
     journal: Option<Journal>,
 }
@@ -517,10 +512,6 @@ fn gather(env: &Env) -> Result<Facts, String> {
             }
         }
     }
-    let applets = env.config_home.join(PLASMA_APPLETSRC);
-    let plasma_applets = read_opt(&applets)
-        .is_some_and(|t| rename_plasmoid_id(&t) != t)
-        .then_some(applets);
     let old = [Origin::Cosmic, Origin::Plasma]
         .into_iter()
         .map(|o| gather_old(env, o))
@@ -542,7 +533,6 @@ fn gather(env: &Env) -> Result<Facts, String> {
         // The marker's own directory counts as empty for this purpose only before it is written.
         new_state_empty: is_empty_dir(&state),
         panels,
-        plasma_applets,
         journal: read_opt(&env.journal_path()).and_then(|t| serde_json::from_str(&t).ok()),
     })
 }
@@ -587,10 +577,6 @@ pub enum Step {
         /// The old install's settings.
         old: Box<Config>,
     },
-    /// Rename the old plasmoid id to the new one in plasmashell's applet list (exact entries
-    /// only). Read again when it runs, since plasmashell rewrites the file itself; a failure is
-    /// reported but doesn't stop the migration.
-    RenamePlasmoid(PathBuf),
     /// Remove a file (nothing to do if it is gone).
     Remove(PathBuf),
     /// Remove a directory if it is empty.
@@ -629,9 +615,7 @@ impl std::fmt::Display for Step {
                 from = from.display().to_string(),
                 to = to.display().to_string()
             )),
-            Step::Write { path, .. }
-            | Step::MergeConfig { path, .. }
-            | Step::RenamePlasmoid(path) => f.write_str(&fl!(
+            Step::Write { path, .. } | Step::MergeConfig { path, .. } => f.write_str(&fl!(
                 "migrate-step-write",
                 path = path.display().to_string()
             )),
@@ -768,9 +752,6 @@ fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, MigrationFailure> {
                 &format!("\"{COSMIC_DESKTOP_ID}\""),
             ),
         });
-    }
-    if let Some(path) = &facts.plasma_applets {
-        steps.push(Step::RenamePlasmoid(path.clone()));
     }
     steps.push(Step::Write {
         path: env.marker(),
@@ -1064,42 +1045,6 @@ fn restore_old_keeper(env: &Env, origin: Origin, journal: &Journal) -> Vec<Strin
     failures
 }
 
-/// `plugin=<old id>` and comma-separated lists (`extraItems=a,b,<old id>`) in plasmashell's applet
-/// list, with the old plasmoid id replaced by the new one. Whole entries only, so an id that
-/// merely contains the old one is left alone; line endings are kept.
-fn rename_plasmoid_id(text: &str) -> String {
-    text.split_inclusive('\n')
-        .map(|line| {
-            let body = line.trim_end_matches(['\n', '\r']);
-            let ending = &line[body.len()..];
-            match body.split_once('=') {
-                Some((key, value)) if value.split(',').any(|v| v == OLD_PLASMOID_ID) => {
-                    let new: Vec<&str> = value
-                        .split(',')
-                        .map(|v| if v == OLD_PLASMOID_ID { APP_ID } else { v })
-                        .collect();
-                    format!("{key}={}{ending}", new.join(","))
-                }
-                _ => line.to_string(),
-            }
-        })
-        .collect()
-}
-
-/// Apply [`rename_plasmoid_id`] to the file as it is now, keeping its permissions (it is `0600`).
-fn rewrite_applets(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let new = rename_plasmoid_id(&text);
-    if new == text {
-        return Ok(());
-    }
-    let mode = std::fs::metadata(path)
-        .ok()
-        .map(|m| m.permissions().mode() & 0o7777);
-    config::write_atomic_mode(path, &new, mode).map_err(|e| e.to_string())
-}
-
 /// Carry out one step.
 fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), MigrationFailure> {
     match step {
@@ -1152,17 +1097,6 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Mig
                     }
                 })
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-        }
-        Step::RenamePlasmoid(path) => {
-            if let Err(error) = rewrite_applets(path) {
-                let line = fl!(
-                    "migrate-log-panel-kept",
-                    path = path.display().to_string(),
-                    error = error
-                );
-                eprintln!("{line}");
-                log.push(line);
-            }
         }
         Step::Write { path, content } => {
             config::write_atomic(path, content).map_err(|e| format!("{}: {e}", path.display()))?;
