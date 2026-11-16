@@ -4489,7 +4489,7 @@ dependencies = [
 name = "rclone-ui-core"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "jiff",
  "mime_guess",
  "rclone-ui-i18n",
