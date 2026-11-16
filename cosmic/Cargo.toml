@@ -21,3 +21,6 @@ features = ["applet", "dbus-config", "multi-window", "tokio", "wayland", "winit"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rclone-ui-core = { workspace = true, features = ["test-identity"] }

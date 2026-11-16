@@ -405,11 +405,13 @@ mod tests {
         assert_eq!(s.load(), saved);
         assert_eq!(TomlStore::new(path.clone()).load(), saved);
         // No temp files are left behind.
-        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        let mut names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
             .unwrap()
             .flatten()
             .map(|e| e.file_name())
             .collect();
+        // read_dir order depends on the filesystem.
+        names.sort();
         assert_eq!(names, ["config.toml", "config.toml.lock"]);
         let _ = std::fs::remove_dir_all(dir);
     }

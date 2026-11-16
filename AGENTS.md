@@ -42,6 +42,9 @@ Every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`. No literals i
 - `just ci`: everything CI runs, for the parts you have toolchains for. `just core::ci`,
   `just cosmic::ci`, `just plasma::ci` run one part.
 - `cargo test` at the root only builds `crates/*`. Front ends: `cargo test -p <package>`.
+- CI tests each package on its own. `cargo test --workspace` unifies features across crates
+  (e.g. core's `test-identity`) and can hide a missing dev-dependency, so check with `just ci`
+  or `cargo test -p <package>` before pushing.
 - `just test-live`: against a throwaway `rclone rcd`.
 - `just cosmic::install-user` / `just plasma::install-user`: installs into `~/.local`. After a
   Plasma install, restart Dolphin with `QT_PLUGIN_PATH` set.
