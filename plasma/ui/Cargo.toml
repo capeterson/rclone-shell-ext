@@ -8,6 +8,8 @@ version.workspace = true
 [dependencies]
 rclone-ui-core.workspace = true
 rclone-ui-view.workspace = true
+rclone-ui-i18n.workspace = true
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
 serde.workspace = true
 serde_json.workspace = true
 cxx = "1"

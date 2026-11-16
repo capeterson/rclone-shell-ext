@@ -3,3 +3,5 @@
 
 pub mod details;
 pub mod settings;
+#[allow(clippy::unnecessary_box_returns)] // cxx-qt boxes the (empty) Rust struct
+pub mod strings;

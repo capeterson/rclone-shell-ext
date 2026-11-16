@@ -26,6 +26,8 @@ pub fn run_settings() -> i32 {
 /// Create the application and engine, load one window from the QML module, and run the event
 /// loop until the window closes.
 fn run_qml(file: &str, display_name: &str) -> i32 {
+    // Pick the user's languages before any QML asks for text.
+    rclone_ui_i18n::init();
     // Make sure the generated QML types and the module's resources are linked in.
     cxx_qt::init_crate!(rclone_shell_ext_plasma_ui);
     cxx_qt::init_qml_module!("com.ca_peterson.RcloneShellExt");

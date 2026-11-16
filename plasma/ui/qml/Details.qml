@@ -12,7 +12,7 @@ import com.ca_peterson.RcloneShellExt
 Kirigami.ApplicationWindow {
     id: root
 
-    title: "rclone"
+    title: Strings.t("details-window-title")
     width: 480
     height: 680
     minimumWidth: width
@@ -65,7 +65,7 @@ Kirigami.ApplicationWindow {
             }
             QQC2.Label {
                 Layout.alignment: Qt.AlignHCenter
-                text: "Checking sync status…"
+                text: Strings.t("details-checking-sync-status")
             }
         }
 
@@ -111,7 +111,7 @@ Kirigami.ApplicationWindow {
             // 2. Sync status: a title, a status line and a fixed set of detail rows
             Kirigami.Heading {
                 level: 4
-                text: "Sync status"
+                text: Strings.t("details-heading-sync-status")
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -143,13 +143,13 @@ Kirigami.ApplicationWindow {
 
                 Repeater {
                     model: details.isDir
-                        ? [["Uploading", details.uploading],
-                           ["Downloading", details.downloading],
+                        ? [[Strings.t("details-row-uploading"), details.uploading],
+                           [Strings.t("details-row-downloading"), details.downloading],
                            [details.cachedLabel, details.cached]]
-                        : [["Drive modified", details.driveModified],
-                           ["Cached locally", details.cacheState],
-                           ["Size", details.size],
-                           ["Version", details.version]]
+                        : [[Strings.t("details-row-drive-modified"), details.driveModified],
+                           [Strings.t("details-row-cached-locally"), details.cacheState],
+                           [Strings.t("details-row-size"), details.size],
+                           [Strings.t("details-row-version"), details.version]]
                     delegate: Item {
                         id: cell
                         required property var modelData
@@ -185,7 +185,7 @@ Kirigami.ApplicationWindow {
                 Kirigami.Heading {
                     Layout.fillWidth: true
                     level: 4
-                    text: "Sharing"
+                    text: Strings.t("details-heading-sharing")
                 }
                 QQC2.Label {
                     text: details.sharingSummary
@@ -199,19 +199,19 @@ Kirigami.ApplicationWindow {
                 spacing: Kirigami.Units.smallSpacing
                 QQC2.Label {
                     Layout.fillWidth: true
-                    text: "Name"
+                    text: Strings.t("details-column-name")
                     font.bold: true
                     font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
                 QQC2.Label {
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 6
-                    text: "Role"
+                    text: Strings.t("details-column-role")
                     font.bold: true
                     font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
                 QQC2.Label {
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 8.5
-                    text: "Type"
+                    text: Strings.t("details-column-type")
                     font.bold: true
                     font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
@@ -337,19 +337,19 @@ Kirigami.ApplicationWindow {
 
                 QQC2.Button {
                     id: openButton
-                    text: "Open"
+                    text: Strings.t("details-open")
                     icon.name: "document-open"
                     onClicked: details.openIsMenu ? openMenu.popup(openButton, 0, -openMenu.height) : details.openFolder()
 
                     QQC2.Menu {
                         id: openMenu
                         QQC2.MenuItem {
-                            text: "Folder"
+                            text: Strings.t("details-open-folder")
                             icon.name: "folder-open"
                             onTriggered: details.openFolder()
                         }
                         QQC2.MenuItem {
-                            text: "File"
+                            text: Strings.t("details-open-file")
                             icon.name: "document-open"
                             onTriggered: details.openFile()
                         }
@@ -358,7 +358,7 @@ Kirigami.ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 QQC2.Button {
                     visible: details.offlineAction !== "none"
-                    text: details.offlineAction === "keep" ? "Keep offline" : "Stop keeping offline"
+                    text: details.offlineAction === "keep" ? Strings.t("details-keep-offline") : Strings.t("details-stop-keeping-offline")
                     icon.name: details.offlineAction === "keep" ? "folder-download" : "edit-delete"
                     onClicked: details.keepOffline(details.offlineAction === "keep")
                 }
