@@ -9,7 +9,7 @@ description = "Toolkit-free rclone status, offline-folder and setup logic shared
 name = "rclone_ui_core"
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 jiff.workspace = true
 mime_guess = "2"
 rclone-ui-i18n.workspace = true
