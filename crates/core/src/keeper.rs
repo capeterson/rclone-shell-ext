@@ -35,22 +35,28 @@ fn now() -> i64 {
 
 /// Run an rc method as an async job and wait for it, so long transfers don't hit the HTTP
 /// timeout. Returns the job's status reply.
-fn rc_job(cfg: &Config, method: &str, mut params: Value) -> Result<Value, String> {
+fn rc_job(cfg: &Config, method: &str, mut params: Value) -> Result<Value, PinError> {
     params["_async"] = json!(true);
     let started = rc::rc_request(cfg, method, &params)?;
     let id = started
         .get("jobid")
         .and_then(Value::as_i64)
-        .ok_or_else(|| fl!("offline-err-no-job-id", method = method))?;
+        .ok_or_else(|| PinError::NoJobId {
+            method: method.to_string(),
+        })?;
     loop {
         std::thread::sleep(JOB_POLL);
-        let st = rc::rc_request(cfg, "job/status", &json!({ "jobid": id }))
-            .map_err(|e| fl!("offline-err-lost-contact", method = method, error = e))?;
+        let st = rc::rc_request(cfg, "job/status", &json!({ "jobid": id })).map_err(|error| {
+            PinError::LostContact {
+                method: method.to_string(),
+                error,
+            }
+        })?;
         if st.get("finished").and_then(Value::as_bool) == Some(true) {
             return if st.get("success").and_then(Value::as_bool) == Some(true) {
                 Ok(st)
             } else {
-                Err(failure_text(&st))
+                Err(failure_text(&st).into())
             };
         }
     }
@@ -303,11 +309,11 @@ fn classify_changes(
 }
 
 /// Run bisync for one folder.
-fn bisync(cfg: &Config, remote: &str, local: &Path, resync: bool) -> Result<(), String> {
+fn bisync(cfg: &Config, remote: &str, local: &Path, resync: bool) -> Result<(), PinError> {
     // Jobs run inside rclone, so one started by an earlier keeper (before a restart or an
     // upgrade) can still be going. Never run a second one alongside it.
     if running_jobs(cfg) > 0 {
-        return Err(fl!("offline-err-earlier-sync"));
+        return Err(PinError::EarlierSync);
     }
     bisync_in(cfg, remote, local, &pin::workdir(), resync)
 }
@@ -360,7 +366,7 @@ fn bisync_in(
     local: &Path,
     workdir: &Path,
     resync: bool,
-) -> Result<(), String> {
+) -> Result<(), PinError> {
     std::fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
     let filters = workdir.join("keeper-filters.txt");
     if std::fs::read_to_string(&filters).ok().as_deref() != Some(FILTERS) {
@@ -394,18 +400,20 @@ fn bisync_in(
         // bisync refuses to delete more than its percentage, which on a small folder is a
         // handful of files. Allow up to `DELETE_FLOOR` files regardless. The abort comes before
         // anything is applied and leaves both sides' listings, so count what's pending here.
-        Err(e) if e.contains(TOO_MANY_DELETES) => {
+        Err(e) if e.raw_contains(TOO_MANY_DELETES) => {
             let pending = Pending::read(workdir, local).ok_or_else(|| {
-                format!("bisync aborted: {TOO_MANY_DELETES} (can't check how many)")
+                PinError::Other(format!(
+                    "bisync aborted: {TOO_MANY_DELETES} (can't check how many)"
+                ))
             })?;
             if !pending.within_limit() {
-                return Err(format!(
+                return Err(PinError::Other(format!(
                     "bisync aborted: {TOO_MANY_DELETES} ({} of {} in the cloud, {} of {} here)",
                     pending.gone_remote.len(),
                     pending.had_remote,
                     pending.gone_local.len(),
                     pending.had_local,
-                ));
+                )));
             }
             run(true)
         }
@@ -413,7 +421,7 @@ fn bisync_in(
         // change); here it mostly fires on small folders where the one file was edited. It
         // aborts before anything is applied and only after the delete check has passed (so
         // nothing was deleted), and repeating with `force` deletes nothing more.
-        Err(e) if e.contains(ALL_CHANGED) => run(true),
+        Err(e) if e.raw_contains(ALL_CHANGED) => run(true),
         Err(e) => Err(e),
     }
 }
@@ -426,7 +434,7 @@ struct RcRemote<'a> {
 }
 
 impl Remote for RcRemote<'_> {
-    fn exists(&self, path: &str) -> Result<bool, String> {
+    fn exists(&self, path: &str) -> Result<bool, PinError> {
         let r = rc::rc_request(
             self.cfg,
             "operations/stat",
@@ -434,15 +442,15 @@ impl Remote for RcRemote<'_> {
         )?;
         Ok(r.get("item").is_some_and(|i| !i.is_null()))
     }
-    fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+    fn rename(&self, from: &str, to: &str) -> Result<(), PinError> {
         let p = json!({ "srcFs": self.remote, "srcRemote": from, "dstFs": self.remote, "dstRemote": to });
         rc_job(self.cfg, "operations/movefile", p).map(|_| ())
     }
-    fn upload(&self, local: &str, to: &str) -> Result<(), String> {
+    fn upload(&self, local: &str, to: &str) -> Result<(), PinError> {
         let p = json!({ "srcFs": self.local, "srcRemote": local, "dstFs": self.remote, "dstRemote": to });
         rc_job(self.cfg, "operations/copyfile", p).map(|_| ())
     }
-    fn delete(&self, path: &str) -> Result<(), String> {
+    fn delete(&self, path: &str) -> Result<(), PinError> {
         let p = json!({ "fs": self.remote, "remote": path });
         rc_job(self.cfg, "operations/deletefile", p).map(|_| ())
     }
@@ -453,7 +461,7 @@ impl Remote for RcRemote<'_> {
 #[derive(Debug, PartialEq, Eq)]
 enum Failure {
     /// Probably transient (offline, rate limits): retry with backoff.
-    Retry(String),
+    Retry(PinError),
     /// bisync has no baseline to compare against; a resync rebuilds it without deleting.
     NeedsResync,
     /// A previous run was cut off and left its lock behind.
@@ -462,7 +470,12 @@ enum Failure {
     Attention(PinError),
 }
 
-fn classify(err: &str) -> Failure {
+/// Which way to handle a failed sync. Only rclone's own text is searched for clues; an error the
+/// keeper made itself is already coded and is simply retried.
+fn classify(error: &PinError) -> Failure {
+    let PinError::Other(err) = error else {
+        return Failure::Retry(error.clone());
+    };
     let e = err.to_lowercase();
     if e.contains("cannot find prior path1 or path2 listings") {
         Failure::NeedsResync
@@ -483,7 +496,7 @@ fn classify(err: &str) -> Failure {
     } else if e.contains("bisync aborted") || e.contains("must run --resync") {
         Failure::Attention(PinError::SyncStopped)
     } else {
-        Failure::Retry(err.to_string())
+        Failure::Retry(error.clone())
     }
 }
 
@@ -571,8 +584,8 @@ impl Keeper {
 
     /// The cloud side to use when only flushing a copy that already syncs (unpinning): by the
     /// Drive id it has been synced with, if any.
-    fn remote_for(&self, rel: &str) -> Result<String, String> {
-        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or_else(|| fl!("offline-err-mount-down"))?;
+    fn remote_for(&self, rel: &str) -> Result<String, PinError> {
+        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or(PinError::MountDown)?;
         Ok(
             match self.state.pin(rel).and_then(|p| p.folder_id.as_deref()) {
                 Some(id) => pin::remote_by_id(&fs, id),
@@ -679,9 +692,9 @@ impl Keeper {
         }
     }
 
-    fn sync_once(&mut self, rel: &str, local: &Path, resync: bool) -> Result<(), String> {
+    fn sync_once(&mut self, rel: &str, local: &Path, resync: bool) -> Result<(), PinError> {
         std::fs::create_dir_all(local).map_err(|e| e.to_string())?;
-        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or_else(|| fl!("offline-err-mount-down"))?;
+        let fs = rc::mount_fs(&self.cfg.mount_path).ok_or(PinError::MountDown)?;
         let path_remote = pin::remote(&fs, rel);
         // Address the cloud folder by its Drive id (see `pin::remote_by_id`), when it has one.
         let known = self.state.pin(rel).and_then(|p| p.folder_id.clone());
@@ -691,16 +704,16 @@ impl Keeper {
             // keeper starts by itself when a baseline is missing) would recreate a deleted
             // folder from the local copy. So never fall back to the path from here.
             Lookup::Missing if known.is_some() => {
-                return Err("directory not found: the folder is gone from the cloud".into())
+                return Err(PinError::Other(
+                    "directory not found: the folder is gone from the cloud".into(),
+                ))
             }
-            Lookup::Failed(e) if known.is_some() => {
-                return Err(fl!("offline-err-cloud-lookup", error = e))
-            }
+            Lookup::Failed(e) if known.is_some() => return Err(PinError::CloudLookup { error: e }),
             Lookup::NotDrive | Lookup::Missing | Lookup::Failed(_) => None,
         };
         let (remote, resync) = if let Some(id) = &id {
             if known.as_deref().is_some_and(|k| k != id) {
-                return Err(FOLDER_REPLACED.into());
+                return Err(PinError::Other(FOLDER_REPLACED.into()));
             }
             let mut resync = resync;
             if known.is_none() {
@@ -716,7 +729,7 @@ impl Keeper {
             (pin::remote_by_id(&fs, id), resync)
         } else {
             if !pin::session_fits(&path_remote, &local.to_string_lossy()) {
-                return Err(fl!("offline-err-path-too-long"));
+                return Err(PinError::PathTooLong);
             }
             (path_remote, resync)
         };
@@ -735,7 +748,7 @@ impl Keeper {
         remote: &str,
         local: &Path,
         resync: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), PinError> {
         let synced = (!resync)
             .then(|| listing_file(&pin::workdir(), local, ".path2.lst"))
             .flatten()
@@ -758,10 +771,10 @@ impl Keeper {
         Ok(())
     }
 
-    fn failed(&mut self, rel: &str, err: &str, was_resync: bool) {
+    fn failed(&mut self, rel: &str, err: &PinError, was_resync: bool) {
         let p = self.pin(rel);
         p.failures += 1;
-        p.error = Some(PinError::Other(err.to_string()));
+        p.error = Some(err.clone());
         match classify(err) {
             Failure::NeedsResync if !was_resync => {
                 // Safe to do without asking: a resync only copies, never deletes.
@@ -798,7 +811,7 @@ impl Keeper {
         }
     }
 
-    fn resolve_conflicts(&mut self, rel: &str, remote: &str, local: &Path) -> Result<(), String> {
+    fn resolve_conflicts(&mut self, rel: &str, remote: &str, local: &Path) -> Result<(), PinError> {
         let pairs = conflict::find_pairs(local);
         if pairs.is_empty() {
             return Ok(());
@@ -873,7 +886,12 @@ impl Keeper {
                 Err(e) => Err(e),
             };
             if let Err(e) = pushed {
-                self.pin(rel).error = Some(PinError::UploadLast { error: e });
+                self.pin(rel).error = Some(match e {
+                    PinError::Other(error) => PinError::UploadLast { error },
+                    cause => PinError::UploadLastFailed {
+                        cause: Box::new(cause),
+                    },
+                });
                 return;
             }
         }
@@ -1055,6 +1073,10 @@ pub fn set_pinned(path: &str, pinned: bool) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    fn classify_text(s: &str) -> Failure {
+        classify(&PinError::Other(s.to_string()))
+    }
+
     /// Against a real rclone: `rclone rcd --rc-no-auth --rc-addr 127.0.0.1:5611` and
     /// `RCS_IT_DIR` set to a short, empty-able directory (bisync's file names must stay short).
     /// Checks the rc calls this module makes are ones rclone accepts, end to end.
@@ -1207,7 +1229,7 @@ mod tests {
         }
         std::fs::remove_file(l.join("s4.txt")).unwrap();
         let err = run(false).unwrap_err();
-        assert!(err.contains("too many deletes"), "{err}");
+        assert!(err.raw_contains("too many deletes"), "{err:?}");
         assert!(r.join("m10.txt").exists(), "nothing was deleted");
         for i in 10..15 {
             std::fs::write(l.join(format!("m{i}.txt")), "m").unwrap();
@@ -1220,7 +1242,7 @@ mod tests {
             std::fs::remove_file(e.path()).unwrap();
         }
         let err = run(false).unwrap_err();
-        assert!(matches!(classify(&err), Failure::Attention(_)), "{err}");
+        assert!(matches!(classify(&err), Failure::Attention(_)), "{err:?}");
         assert!(r.join("m10.txt").exists(), "nothing was deleted");
         // Repair brings everything back.
         run(true).unwrap();
@@ -1229,14 +1251,14 @@ mod tests {
         // Failures arrive with a reason `classify` understands, without colour codes.
         let wd2 = base.join("wd2");
         let err = bisync_in(&cfg, &remote, &l, &wd2, false).unwrap_err();
-        assert_eq!(classify(&err), Failure::NeedsResync, "{err}");
+        assert_eq!(classify(&err), Failure::NeedsResync, "{err:?}");
         // A cloud folder that vanished stops the sync. (A *resync* would recreate it from the
         // local copy, which is why the keeper never resyncs a missing folder by itself.)
         let away = base.join("r.away");
         std::fs::rename(&r, &away).unwrap();
         let err = run(false).unwrap_err();
-        assert!(matches!(classify(&err), Failure::Attention(_)), "{err}");
-        assert!(!err.contains('\u{1b}'));
+        assert!(matches!(classify(&err), Failure::Attention(_)), "{err:?}");
+        assert!(!err.label().contains('\u{1b}'));
         assert!(!r.exists(), "nothing was recreated");
         std::fs::rename(&away, &r).unwrap();
     }
@@ -1370,7 +1392,10 @@ mod tests {
             text.starts_with("cannot find prior Path1 or Path2 listings"),
             "{text}"
         );
-        assert_eq!(classify(&text), Failure::NeedsResync);
+        assert_eq!(
+            classify(&PinError::Other(text.clone())),
+            Failure::NeedsResync
+        );
 
         let st = json!({
             "error": "bisync aborted",
@@ -1379,7 +1404,7 @@ mod tests {
                 found\nERROR : Bisync aborted. Must run --resync to recover.\n" }
         });
         assert!(matches!(
-            classify(&failure_text(&st)),
+            classify(&PinError::Other(failure_text(&st).clone())),
             Failure::Attention(_)
         ));
 
@@ -1398,7 +1423,7 @@ mod tests {
         let st = json!({ "error": "\u{1b}[31mprior lock file found: \u{1b}[93m/s/bisync/a..b.lck\u{1b}[0m \n\
             \u{1b}[0m\u{1b}[35mTip: this indicates that another bisync run\n" });
         assert_eq!(
-            classify(&failure_text(&st)),
+            classify(&PinError::Other(failure_text(&st).clone())),
             Failure::StaleLock(PathBuf::from("/s/bisync/a..b.lck"))
         );
     }
@@ -1438,28 +1463,41 @@ mod tests {
 
     #[test]
     fn a_replaced_cloud_folder_needs_attention() {
-        assert!(matches!(classify(FOLDER_REPLACED), Failure::Attention(_)));
+        assert!(matches!(
+            classify_text(FOLDER_REPLACED),
+            Failure::Attention(_)
+        ));
     }
 
     #[test]
     fn classifies_bisync_errors() {
         assert_eq!(
-            classify("cannot find prior Path1 or Path2 listings, likely due to critical error"),
+            classify_text(
+                "cannot find prior Path1 or Path2 listings, likely due to critical error"
+            ),
             Failure::NeedsResync
         );
         assert_eq!(
-            classify("prior lock file found: /s/bisync/a..b.lck"),
+            classify_text("prior lock file found: /s/bisync/a..b.lck"),
             Failure::StaleLock(PathBuf::from("/s/bisync/a..b.lck"))
         );
         assert!(matches!(
-            classify("directory not found"),
+            classify_text("directory not found"),
             Failure::Attention(_)
         ));
-        assert!(matches!(classify("bisync aborted"), Failure::Attention(_)));
         assert!(matches!(
-            classify("Post \"https://www.googleapis.com\": dial tcp: no such host"),
+            classify_text("bisync aborted"),
+            Failure::Attention(_)
+        ));
+        assert!(matches!(
+            classify_text("Post \"https://www.googleapis.com\": dial tcp: no such host"),
             Failure::Retry(_)
         ));
+        // Errors the keeper coded itself are kept as they are and retried.
+        assert_eq!(
+            classify(&PinError::EarlierSync),
+            Failure::Retry(PinError::EarlierSync)
+        );
     }
 
     #[test]
@@ -1501,7 +1539,7 @@ mod tests {
             true,
         )
         .unwrap_err();
-        assert_eq!(err, "bisync aborted");
+        assert_eq!(err, PinError::Other("bisync aborted".into()));
         let reqs = s.requests();
         let start = reqs.iter().find(|r| r.path() == "/sync/bisync").unwrap();
         let body: Value = serde_json::from_str(&start.body).unwrap();
@@ -1544,7 +1582,7 @@ mod tests {
         };
         assert_eq!(running_jobs(&cfg), 1);
         let err = bisync(&cfg, "r:x", Path::new("/l"), false).unwrap_err();
-        assert_eq!(err, fl!("offline-err-earlier-sync"));
+        assert_eq!(err, PinError::EarlierSync);
         assert!(!s.paths().contains(&"/sync/bisync".to_string()));
     }
 }

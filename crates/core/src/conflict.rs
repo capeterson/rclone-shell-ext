@@ -12,6 +12,7 @@
 //!
 //! Every step checks what's already done, so a failure part way is fixed by running it again.
 
+use crate::pin::PinError;
 use rclone_ui_i18n::fl;
 use std::path::{Path, PathBuf};
 
@@ -20,11 +21,11 @@ pub const P2: &str = "..path2";
 
 /// The remote operations conflict resolution needs, so tests can run without rclone.
 pub trait Remote {
-    fn exists(&self, path: &str) -> Result<bool, String>;
-    fn rename(&self, from: &str, to: &str) -> Result<(), String>;
+    fn exists(&self, path: &str) -> Result<bool, PinError>;
+    fn rename(&self, from: &str, to: &str) -> Result<(), PinError>;
     /// Upload `local` (a file inside the local copy, given relative to it) over `to`.
-    fn upload(&self, local: &str, to: &str) -> Result<(), String>;
-    fn delete(&self, path: &str) -> Result<(), String>;
+    fn upload(&self, local: &str, to: &str) -> Result<(), PinError>;
+    fn delete(&self, path: &str) -> Result<(), PinError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -101,7 +102,7 @@ fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
 }
 
 /// Resolve the conflict for `base` (from [`find_pairs`]) in the local copy at `root`.
-pub fn resolve(root: &Path, base: &str, remote: &dyn Remote) -> Result<Resolved, String> {
+pub fn resolve(root: &Path, base: &str, remote: &dyn Remote) -> Result<Resolved, PinError> {
     let (r1, r2) = (format!("{base}{P1}"), format!("{base}{P2}"));
     let (l1, l2): (PathBuf, PathBuf) = (root.join(&r1), root.join(&r2));
     let same = same_contents(&l1, &l2).map_err(|e| e.to_string())?;
@@ -176,9 +177,9 @@ mod tests {
                 ..Self::default()
             }
         }
-        fn op(&self, s: String) -> Result<(), String> {
+        fn op(&self, s: String) -> Result<(), PinError> {
             if self.fail_on.is_some_and(|f| s.starts_with(f)) {
-                return Err(format!("boom: {s}"));
+                return Err(format!("boom: {s}").into());
             }
             self.log.borrow_mut().push(s);
             Ok(())
@@ -186,21 +187,21 @@ mod tests {
     }
 
     impl Remote for Fake {
-        fn exists(&self, p: &str) -> Result<bool, String> {
+        fn exists(&self, p: &str) -> Result<bool, PinError> {
             Ok(self.files.borrow().contains(p))
         }
-        fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+        fn rename(&self, from: &str, to: &str) -> Result<(), PinError> {
             self.op(format!("rename {from} -> {to}"))?;
             self.files.borrow_mut().remove(from);
             self.files.borrow_mut().insert(to.into());
             Ok(())
         }
-        fn upload(&self, local: &str, to: &str) -> Result<(), String> {
+        fn upload(&self, local: &str, to: &str) -> Result<(), PinError> {
             self.op(format!("upload {local} -> {to}"))?;
             self.files.borrow_mut().insert(to.into());
             Ok(())
         }
-        fn delete(&self, p: &str) -> Result<(), String> {
+        fn delete(&self, p: &str) -> Result<(), PinError> {
             self.op(format!("delete {p}"))?;
             self.files.borrow_mut().remove(p);
             Ok(())

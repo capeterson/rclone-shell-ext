@@ -346,11 +346,37 @@ pub enum PinError {
     DeleteLocal { error: String },
     /// No network.
     NoNetwork,
+    /// rclone accepted `method` but didn't return a job id (`method` is rclone's own name).
+    NoJobId { method: String },
+    /// Lost contact with rclone while it ran `method`; `error` is the transport's own text.
+    LostContact { method: String, error: String },
+    /// A sync started earlier is still running in rclone.
+    EarlierSync,
+    /// Couldn't look up the cloud folder's Drive id; `error` is rclone's own text.
+    CloudLookup { error: String },
+    /// The folder's path is too long for bisync's working-file names.
+    PathTooLong,
+    /// The Drive mount isn't running.
+    MountDown,
+    /// Removing: uploading the last changes failed for a reason that is itself coded.
+    UploadLastFailed { cause: Box<PinError> },
     /// rclone's own text, or text written before errors were coded.
     Other(String),
 }
 
+impl From<String> for PinError {
+    fn from(s: String) -> Self {
+        PinError::Other(s)
+    }
+}
+
 impl PinError {
+    /// Whether this is rclone's/the OS's own text and it contains `needle`. Errors the keeper
+    /// coded itself never match: there is no text of ours to search.
+    pub fn raw_contains(&self, needle: &str) -> bool {
+        matches!(self, PinError::Other(s) if s.contains(needle))
+    }
+
     /// The wording, in the current language.
     pub fn label(&self) -> String {
         match self {
@@ -371,6 +397,23 @@ impl PinError {
                 fl!("offline-err-delete-local", error = error.as_str())
             }
             PinError::NoNetwork => fl!("offline-err-no-network"),
+            PinError::NoJobId { method } => {
+                fl!("offline-err-no-job-id", method = method.as_str())
+            }
+            PinError::LostContact { method, error } => fl!(
+                "offline-err-lost-contact",
+                method = method.as_str(),
+                error = error.as_str()
+            ),
+            PinError::EarlierSync => fl!("offline-err-earlier-sync"),
+            PinError::CloudLookup { error } => {
+                fl!("offline-err-cloud-lookup", error = error.as_str())
+            }
+            PinError::PathTooLong => fl!("offline-err-path-too-long"),
+            PinError::MountDown => fl!("offline-err-mount-down"),
+            PinError::UploadLastFailed { cause } => {
+                fl!("offline-err-upload-last", error = cause.label())
+            }
             PinError::Other(s) => s.clone(),
         }
     }
@@ -378,7 +421,7 @@ impl PinError {
     /// Read an `offline.json` value from before errors were coded: the English sentence the old
     /// keeper wrote. Known sentences get their variant back; anything else stays raw text.
     fn from_legacy(s: String) -> Self {
-        const EXACT: [(&str, PinError); 7] = [
+        const EXACT: [(&str, PinError); 10] = [
             (
                 "The folder wasn't found in the Drive mount (moved or deleted?)",
                 PinError::FolderMissing,
@@ -404,6 +447,15 @@ impl PinError {
                 PinError::WaitingToUpload,
             ),
             ("Files in the folder are still open", PinError::FilesOpen),
+            (
+                "An earlier sync is still finishing",
+                PinError::EarlierSync,
+            ),
+            (
+                "The folder's path is too long for rclone bisync",
+                PinError::PathTooLong,
+            ),
+            ("The Drive mount is down", PinError::MountDown),
         ];
         if let Some((_, v)) = EXACT.iter().find(|(text, _)| *text == s) {
             return v.clone();
@@ -411,12 +463,35 @@ impl PinError {
         if s == "no network" {
             return PinError::NoNetwork;
         }
+        if let Some(method) = s.strip_suffix(": rclone didn't return a job id") {
+            return PinError::NoJobId {
+                method: method.to_string(),
+            };
+        }
+        if let Some((method, error)) = s
+            .strip_prefix("lost contact with rclone during ")
+            .and_then(|rest| rest.split_once(": "))
+        {
+            return PinError::LostContact {
+                method: method.to_string(),
+                error: error.to_string(),
+            };
+        }
+        if let Some(rest) = s.strip_prefix("Couldn't upload the last changes: ") {
+            // The reason may itself be one of our sentences.
+            return match Self::from_legacy(rest.to_string()) {
+                PinError::Other(error) => PinError::UploadLast { error },
+                cause => PinError::UploadLastFailed {
+                    cause: Box::new(cause),
+                },
+            };
+        }
         let prefixed: [(&str, MakeError); 3] = [
+            ("Couldn't look up the cloud folder: ", |error| {
+                PinError::CloudLookup { error }
+            }),
             ("Couldn't mount the offline copy in place: ", |error| {
                 PinError::MountInPlace { error }
-            }),
-            ("Couldn't upload the last changes: ", |error| {
-                PinError::UploadLast { error }
             }),
             ("Couldn't delete the local copy: ", |error| {
                 PinError::DeleteLocal { error }
@@ -1058,6 +1133,59 @@ mod tests {
         assert!(!json.contains("two places"), "{json}");
         let back: OfflineState = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn sync_errors_round_trip_as_codes_and_word_as_before() {
+        let cases = [
+            (
+                PinError::NoJobId {
+                    method: "sync/bisync".into(),
+                },
+                "sync/bisync: rclone didn't return a job id",
+            ),
+            (
+                PinError::LostContact {
+                    method: "sync/bisync".into(),
+                    error: "timed out".into(),
+                },
+                "lost contact with rclone during sync/bisync: timed out",
+            ),
+            (PinError::EarlierSync, "An earlier sync is still finishing"),
+            (
+                PinError::CloudLookup {
+                    error: "boom".into(),
+                },
+                "Couldn't look up the cloud folder: boom",
+            ),
+            (
+                PinError::PathTooLong,
+                "The folder's path is too long for rclone bisync",
+            ),
+            (PinError::MountDown, "The Drive mount is down"),
+            (
+                PinError::UploadLastFailed {
+                    cause: Box::new(PinError::MountDown),
+                },
+                "Couldn't upload the last changes: The Drive mount is down",
+            ),
+        ];
+        for (e, english) in cases {
+            let json = serde_json::to_string(&e).unwrap();
+            for word in [
+                "Couldn't",
+                "lost contact",
+                "earlier sync",
+                "too long",
+                "is down",
+            ] {
+                assert!(!json.contains(word), "{json}");
+            }
+            assert_eq!(serde_json::from_str::<PinError>(&json).unwrap(), e);
+            assert_eq!(e.label(), english);
+            // The English an older keeper stored maps back to the same code.
+            assert_eq!(PinError::from_legacy(english.to_string()), e);
+        }
     }
 
     #[test]
