@@ -17,6 +17,16 @@ pub const DEV_APP_ID: &str = "com.ca-peterson.rclone-shell-ext-dev";
 /// The side-by-side dev build's slug.
 pub const DEV_SLUG: &str = "rclone-shell-ext-dev";
 
+/// Prefix of the status icons and Dolphin emblems in the icon theme. The icons are shared by
+/// the release and dev builds, so this does not follow the dev identity.
+pub const ICON_PREFIX: &str = "rclone-shell-ext";
+
+/// The name of the Dolphin emblem for `state` (`synced`, `offline`, ...).
+#[must_use]
+pub fn emblem_icon(state: &str) -> String {
+    format!("{ICON_PREFIX}-emblem-{state}")
+}
+
 /// The COSMIC front end's desktop id (panel applet entry and `.desktop` file).
 pub const COSMIC_DESKTOP_ID: &str = "com.ca-peterson.rclone-shell-ext.Cosmic";
 /// The dev build's COSMIC desktop id.

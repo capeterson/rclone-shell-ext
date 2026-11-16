@@ -114,6 +114,9 @@ pub fn config_path_in(config_home: &Path, slug: &str) -> PathBuf {
 pub struct TomlStore {
     path: PathBuf,
     write_lock: Mutex<()>,
+    /// Refuse [`ConfigStore::save`] while an old install waits to be migrated (only the
+    /// process-wide store at the real path: stores in tests and the migration are unguarded).
+    guarded: bool,
 }
 
 impl TomlStore {
@@ -123,6 +126,18 @@ impl TomlStore {
         Self {
             path,
             write_lock: Mutex::new(()),
+            guarded: false,
+        }
+    }
+
+    /// Like [`new`](Self::new), but saving is refused while [`crate::migrate::pending`] says an
+    /// old install is waiting: a new front end saving its defaults would otherwise shadow the old
+    /// settings the migration is about to bring over. Reading is always fine.
+    #[must_use]
+    pub fn guarded(path: PathBuf) -> Self {
+        Self {
+            guarded: true,
+            ..Self::new(path)
         }
     }
 
@@ -202,6 +217,29 @@ impl ConfigStore for TomlStore {
     }
 
     fn save(&self, f: &mut dyn FnMut(&mut Config)) -> Result<Config, String> {
+        if self.guarded {
+            self.save_when(crate::migrate::pending(), f)
+        } else {
+            self.save_unguarded(f)
+        }
+    }
+}
+
+impl TomlStore {
+    /// [`ConfigStore::save`] for a given migration status: refused (with the migration's
+    /// message) unless nothing is waiting.
+    pub(crate) fn save_when(
+        &self,
+        status: crate::migrate::MigrationStatus,
+        f: &mut dyn FnMut(&mut Config),
+    ) -> Result<Config, String> {
+        crate::migrate::guard_status(status).map_err(|e| e.message)?;
+        self.save_unguarded(f)
+    }
+
+    /// Read, edit and replace under the cross-process lock, without asking whether a migration
+    /// is pending. The migration's own config write goes through here.
+    pub(crate) fn save_unguarded(&self, f: &mut dyn FnMut(&mut Config)) -> Result<Config, String> {
         let _guard = self
             .write_lock
             .lock()
@@ -246,6 +284,12 @@ pub fn parse_toml(text: &str) -> Config {
 
 /// Write `text` to `path` through a temp file in the same directory and a rename.
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    write_atomic_mode(path, text, None)
+}
+
+/// [`write_atomic`], creating the new file with the Unix permission bits `mode` (so replacing a
+/// private `0600` file doesn't loosen it).
+pub fn write_atomic_mode(path: &Path, text: &str, mode: Option<u32>) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -253,7 +297,13 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     tmp.push(format!(".tmp{}", std::process::id()));
     let tmp = PathBuf::from(tmp);
     let write = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        if let Some(mode) = mode {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(mode);
+        }
+        let mut f = opts.open(&tmp)?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         std::fs::rename(&tmp, path)
@@ -271,7 +321,7 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 /// Install the shared `config.toml` store for the process identity. Every binary calls this
 /// right after [`crate::identity::set_identity`].
 pub fn install_default_store() {
-    set_store(Box::new(TomlStore::new(TomlStore::default_path())));
+    set_store(Box::new(TomlStore::guarded(TomlStore::default_path())));
 }
 
 static STORE: OnceLock<Box<dyn ConfigStore>> = OnceLock::new();
@@ -388,6 +438,37 @@ mod tests {
         let now = s.changed_since(seen).expect("the file appeared");
         assert!(now.is_some());
         assert_eq!(s.changed_since(now), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_guarded_store_refuses_to_save_while_an_old_install_waits() {
+        use crate::migrate::{MigrateError, MigrationStatus};
+        let dir = temp_dir("pending");
+        let path = config_path_in(&dir, "x");
+        let s = TomlStore::guarded(path.clone());
+        for st in [
+            MigrationStatus::Pending,
+            MigrationStatus::Failed(MigrateError::Conflict),
+        ] {
+            let err = s
+                .save_when(st, &mut |c| c.offline_enabled = true)
+                .unwrap_err();
+            assert!(err.contains("--migrate"), "{err}");
+            assert!(!path.exists(), "nothing was written");
+        }
+        // Reading is fine, and saving works once nothing is pending.
+        assert_eq!(s.load(), Config::default());
+        s.save_when(MigrationStatus::NotNeeded, &mut |c| {
+            c.offline_enabled = true;
+        })
+        .unwrap();
+        assert!(s.load().offline_enabled);
+        // The migration's own write is not refused.
+        let s = TomlStore::guarded(config_path_in(&dir, "y"));
+        s.save_unguarded(&mut |c| c.pins = vec!["a".into()])
+            .unwrap();
+        assert_eq!(s.load().pins, ["a"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

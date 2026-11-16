@@ -22,27 +22,25 @@ pub enum PinMark {
     Attention,
 }
 
-pub fn sync_emblem(s: SyncState) -> &'static str {
+pub fn sync_emblem(s: SyncState) -> String {
+    use rclone_ui_core::identity::emblem_icon as emblem;
     match s {
-        SyncState::InSync => "rclone-shell-ext-emblem-synced",
-        SyncState::OnlineOnly => "rclone-shell-ext-emblem-online",
-        SyncState::PartlyCached => "rclone-shell-ext-emblem-partial",
+        SyncState::InSync => emblem("synced"),
+        SyncState::OnlineOnly => emblem("online"),
+        SyncState::PartlyCached => emblem("partial"),
         SyncState::Uploading | SyncState::QueuedUpload | SyncState::LocalNewer => {
-            "rclone-shell-ext-emblem-uploading"
+            emblem("uploading")
         }
-        SyncState::Downloading | SyncState::DriveNewer => "rclone-shell-ext-emblem-downloading",
-        SyncState::Differs => "emblem-warning",
+        SyncState::Downloading | SyncState::DriveNewer => emblem("downloading"),
+        SyncState::Differs => "emblem-warning".into(),
     }
 }
 
 pub fn emblem_list(sync: Option<SyncState>, pin: PinMark) -> Vec<String> {
-    let mut v: Vec<String> = sync
-        .map(|s| sync_emblem(s).to_string())
-        .into_iter()
-        .collect();
+    let mut v: Vec<String> = sync.map(sync_emblem).into_iter().collect();
     match pin {
         PinMark::None => {}
-        PinMark::Offline => v.push("rclone-shell-ext-emblem-offline".into()),
+        PinMark::Offline => v.push(rclone_ui_core::identity::emblem_icon("offline")),
         PinMark::Attention => v.push("emblem-error".into()),
     }
     v

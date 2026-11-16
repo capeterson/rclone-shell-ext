@@ -24,8 +24,9 @@ mod readers;
 pub use readers::parse_kconfig;
 
 use crate::bisync_name::flatten as flat;
-use crate::config::{self, Config};
-use crate::identity::{COSMIC_DESKTOP_ID, SLUG};
+use crate::config::{self, Config, TomlStore};
+use crate::identity::{APP_ID, COSMIC_DESKTOP_ID, SLUG};
+use crate::rc::RcProbeError;
 use crate::units;
 use rclone_ui_i18n::fl;
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,10 @@ const PANEL_DIRS: [&str; 2] = [
     "com.system76.CosmicPanel.Dock",
 ];
 const PANEL_FILES: [&str; 2] = ["plugins_wings", "plugins_center"];
+/// The old Plasma plasmoid id, and the file in `$XDG_CONFIG_HOME` where plasmashell lists its
+/// applets (the panel entry and the system tray's lists).
+const OLD_PLASMOID_ID: &str = "com.ca-peterson.rcloneplasma";
+const PLASMA_APPLETSRC: &str = "plasma-org.kde.plasma.desktop-appletsrc";
 /// bisync's name for a file is limited by the file system.
 const FILE_NAME_MAX: usize = 255;
 
@@ -200,9 +205,10 @@ pub struct Env<'a> {
     pub systemctl: &'a Systemctl<'a>,
     /// The shared `rclone-shell-ext` binary the new units run (empty if it couldn't be found).
     pub exe: PathBuf,
-    /// How many rc jobs the old install's rclone still runs (`None`: it can't be reached,
-    /// e.g. the mount service is down, which means none).
-    pub unfinished_jobs: &'a dyn Fn(&Config) -> Option<usize>,
+    /// How many rc jobs the old install's rclone still runs. `NotRunning` (nothing listens, e.g.
+    /// the mount service is down) means none; any other error means unknown, and unknown is
+    /// never taken for "none".
+    pub unfinished_jobs: &'a dyn Fn(&Config) -> Result<usize, RcProbeError>,
     /// The text of `/proc/self/mountinfo`.
     pub mountinfo: &'a dyn Fn() -> String,
     /// Sleeps between polls (a no-op counter in tests).
@@ -213,8 +219,11 @@ pub struct Env<'a> {
     pub poll: Duration,
 }
 
-/// How long a process that lost the migration lock waits for the winner.
-const LOCK_WAIT: Duration = Duration::from_secs(60);
+/// A foreground process that lost the migration lock waits for the winner this long beyond
+/// [`Env::quiet_timeout`] (the winner may wait that long for a sync, and stop services).
+const LOCK_EXTRA_WAIT: Duration = Duration::from_secs(180);
+/// How often a waiting foreground process says so.
+const LOCK_PROGRESS_EVERY: Duration = Duration::from_secs(10);
 
 impl Env<'_> {
     fn unit_dir(&self) -> PathBuf {
@@ -308,7 +317,6 @@ struct OldFacts {
     dropin: Option<PathBuf>,
     keeper_enabled: bool,
     keeper_active: bool,
-    active_pins: Vec<String>,
     data_dir: bool,
     state_dir: bool,
     /// File names in the old bisync working directory.
@@ -343,12 +351,16 @@ struct Facts {
     marker: bool,
     old: Vec<OldFacts>,
     new_config: bool,
+    /// The new `config.toml` exists but isn't valid TOML (merging into it would lose it).
+    new_config_corrupt: bool,
     new_data_exists: bool,
     new_data_empty: bool,
     new_state_exists: bool,
     new_state_empty: bool,
     /// COSMIC panel config files that list the old applet, with their text.
     panels: Vec<(PathBuf, String)>,
+    /// plasmashell's applet list, if it names the old plasmoid.
+    plasma_applets: Option<PathBuf>,
     /// What an earlier, interrupted run recorded before it changed anything.
     journal: Option<Journal>,
 }
@@ -367,11 +379,20 @@ struct Journal {
     offline_enabled: bool,
     /// The old install had unit files (so new ones are written).
     had_units: bool,
-    /// Ids of the pin units that were running.
-    pins: Vec<String>,
+    /// The old install's mount service (its keeper is only started when this is running).
+    #[serde(default)]
+    service: String,
 }
 
 impl Journal {
+    fn service(&self) -> String {
+        if self.service.is_empty() {
+            Config::default().service
+        } else {
+            self.service.clone()
+        }
+    }
+
     fn origin(&self) -> Option<Origin> {
         [Origin::Cosmic, Origin::Plasma]
             .into_iter()
@@ -429,18 +450,6 @@ fn gather_old(env: &Env, origin: Origin) -> Result<OldFacts, String> {
             .is_ok_and(|o| o.trim().starts_with("enabled"));
     let keeper_active =
         keeper_unit.is_some() && env.sysctl(&["is-active", &origin.keeper_unit()]).is_ok();
-    let active_pins = if pin_template.is_some() {
-        let glob = format!("{}-pin@*.service", origin.slug());
-        env.sysctl(&["list-units", "--plain", "--no-legend", &glob])
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|l| l.split_whitespace().next())
-            .filter(|n| n.ends_with(".service") && n.contains("-pin@"))
-            .map(str::to_string)
-            .collect()
-    } else {
-        Vec::new()
-    };
     let old_data = env.data_home.join(origin.slug());
     let old_state = env.state_home.join(origin.slug());
     // After an interrupted run the old state directory may already be the new one.
@@ -484,7 +493,6 @@ fn gather_old(env: &Env, origin: Origin) -> Result<OldFacts, String> {
         dropin,
         keeper_enabled,
         keeper_active,
-        active_pins,
         data_dir: old_data.is_dir(),
         state_dir: old_state.is_dir(),
         bisync_files,
@@ -509,6 +517,10 @@ fn gather(env: &Env) -> Result<Facts, String> {
             }
         }
     }
+    let applets = env.config_home.join(PLASMA_APPLETSRC);
+    let plasma_applets = read_opt(&applets)
+        .is_some_and(|t| rename_plasmoid_id(&t) != t)
+        .then_some(applets);
     let old = [Origin::Cosmic, Origin::Plasma]
         .into_iter()
         .map(|o| gather_old(env, o))
@@ -517,16 +529,20 @@ fn gather(env: &Env) -> Result<Facts, String> {
         .filter(OldFacts::present)
         .collect();
     let (data, state) = (env.new_data(), env.new_state());
+    let new_config_path = config::config_path_in(&env.config_home, SLUG);
     Ok(Facts {
         marker: env.marker().exists(),
         old,
-        new_config: config::config_path_in(&env.config_home, SLUG).exists(),
+        new_config: new_config_path.exists(),
+        new_config_corrupt: read_opt(&new_config_path)
+            .is_some_and(|t| toml::from_str::<toml::value::Table>(&t).is_err()),
         new_data_exists: data.exists(),
         new_data_empty: is_empty_dir(&data),
         new_state_exists: state.exists(),
         // The marker's own directory counts as empty for this purpose only before it is written.
         new_state_empty: is_empty_dir(&state),
         panels,
+        plasma_applets,
         journal: read_opt(&env.journal_path()).and_then(|t| serde_json::from_str(&t).ok()),
     })
 }
@@ -563,6 +579,18 @@ pub enum Step {
         /// What it holds.
         content: String,
     },
+    /// Merge the old settings into the new `config.toml` under its lock (the old values win for
+    /// the settings both front ends had; a missing file becomes the old settings as they were).
+    MergeConfig {
+        /// The new config file.
+        path: PathBuf,
+        /// The old install's settings.
+        old: Box<Config>,
+    },
+    /// Rename the old plasmoid id to the new one in plasmashell's applet list (exact entries
+    /// only). Read again when it runs, since plasmashell rewrites the file itself; a failure is
+    /// reported but doesn't stop the migration.
+    RenamePlasmoid(PathBuf),
     /// Remove a file (nothing to do if it is gone).
     Remove(PathBuf),
     /// Remove a directory if it is empty.
@@ -601,7 +629,9 @@ impl std::fmt::Display for Step {
                 from = from.display().to_string(),
                 to = to.display().to_string()
             )),
-            Step::Write { path, .. } => f.write_str(&fl!(
+            Step::Write { path, .. }
+            | Step::MergeConfig { path, .. }
+            | Step::RenamePlasmoid(path) => f.write_str(&fl!(
                 "migrate-step-write",
                 path = path.display().to_string()
             )),
@@ -723,12 +753,7 @@ fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, MigrationFailure> {
             offline_enabled: old.config.as_ref().is_some_and(|c| c.offline_enabled)
                 || old.keeper_enabled,
             had_units: old.has_units(),
-            pins: old
-                .active_pins
-                .iter()
-                .filter_map(|u| u.split_once("-pin@"))
-                .map(|(_, id)| id.trim_end_matches(".service").to_string())
-                .collect(),
+            service: old.config.clone().unwrap_or_default().service,
         });
         plan.journal_new = facts.journal.is_none();
         old_install_steps(env, facts, old, &journal, &mut plan, &mut steps)?;
@@ -743,6 +768,9 @@ fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, MigrationFailure> {
                 &format!("\"{COSMIC_DESKTOP_ID}\""),
             ),
         });
+    }
+    if let Some(path) = &facts.plasma_applets {
+        steps.push(Step::RenamePlasmoid(path.clone()));
     }
     steps.push(Step::Write {
         path: env.marker(),
@@ -867,14 +895,17 @@ fn old_install_steps(
 
     // 3. The settings.
     if let Some(cfg) = &old.config {
-        if facts.new_config {
-            plan.notes.push(fl!("migrate-note-config-kept"));
-        } else {
-            steps.push(Step::Write {
-                path: config::config_path_in(&env.config_home, SLUG),
-                content: toml::to_string_pretty(cfg).map_err(|e| e.to_string())?,
-            });
+        let path = config::config_path_in(&env.config_home, SLUG);
+        if facts.new_config_corrupt {
+            return Err(conflict(&path));
         }
+        if facts.new_config {
+            plan.notes.push(fl!("migrate-note-config-merged"));
+        }
+        steps.push(Step::MergeConfig {
+            path,
+            old: Box::new(cfg.clone()),
+        });
         plan.notes.push(fl!("migrate-note-old-config-left"));
     }
 
@@ -969,15 +1000,21 @@ fn offline_mount_left(mountinfo: &str, old_data: &Path, mount_path: &str) -> Opt
     })
 }
 
-/// Wait for rclone's jobs and the pin mounts to be gone.
+/// Wait for rclone's jobs and the pin mounts to be gone. Only "nothing listens" counts as no
+/// jobs; an rc server that answers badly (401, timeout, garbage) is still running something we
+/// can't see, so that is waited out too and ends as [`MigrateError::SyncInFlight`].
 fn wait_quiet(env: &Env, cfg: &Config, old_data: &Path) -> Result<(), MigrationFailure> {
     let mount_path = config::expand(&cfg.mount_path);
     let tries = (env.quiet_timeout.as_millis() / env.poll.as_millis().max(1)).max(1);
-    let (mut jobs, mut mount) = (0, None);
+    let (mut jobs, mut unknown, mut mount) = (0, false, None);
     for i in 0..tries {
-        jobs = (env.unfinished_jobs)(cfg).unwrap_or(0);
+        (jobs, unknown) = match (env.unfinished_jobs)(cfg) {
+            Ok(n) => (n, false),
+            Err(RcProbeError::NotRunning) => (0, false),
+            Err(RcProbeError::Other(_)) => (0, true),
+        };
         mount = offline_mount_left(&(env.mountinfo)(), old_data, &mount_path);
-        if jobs == 0 && mount.is_none() {
+        if jobs == 0 && !unknown && mount.is_none() {
             return Ok(());
         }
         if i + 1 < tries {
@@ -988,6 +1025,11 @@ fn wait_quiet(env: &Env, cfg: &Config, old_data: &Path) -> Result<(), MigrationF
         MigrationFailure::new(
             MigrateError::SyncInFlight,
             fl!("migrate-error-sync-in-flight", count = jobs),
+        )
+    } else if unknown {
+        MigrationFailure::new(
+            MigrateError::SyncInFlight,
+            fl!("migrate-error-sync-unknown"),
         )
     } else {
         MigrationFailure::new(
@@ -1000,21 +1042,62 @@ fn wait_quiet(env: &Env, cfg: &Config, old_data: &Path) -> Result<(), MigrationF
     })
 }
 
-/// Put the old keeper back the way the journal says it was (before any rename, after a failed
-/// [`wait_quiet`]). The keeper brings the pin mounts back itself.
-fn restore_old_keeper(env: &Env, origin: Origin, journal: &Journal, log: &mut Vec<String>) {
+/// Put the old keeper back the way the journal says it was, for a run that failed before it
+/// changed anything. Like `EnableKeeper`, the keeper is started when it was enabled and the mount
+/// service is running (a keeper that was only enabled still gets started by the mount coming up);
+/// it brings the pin mounts back itself. Returns what failed, so the caller can say so.
+fn restore_old_keeper(env: &Env, origin: Origin, journal: &Journal) -> Vec<String> {
     let keeper = origin.keeper_unit();
+    let mount_up = env.sysctl(&["is-active", &journal.service()]).is_ok();
+    let mut failures = Vec::new();
     let mut run = |args: &[&str]| {
         if let Err(e) = env.sysctl(args) {
-            log.push(fl!("migrate-log-ignored", error = e));
+            failures.push(e);
         }
     };
     if journal.keeper_was_enabled {
         run(&["enable", &keeper]);
     }
-    if journal.keeper_was_active {
+    if journal.keeper_was_active || (journal.keeper_was_enabled && mount_up) {
         run(&["start", &keeper]);
     }
+    failures
+}
+
+/// `plugin=<old id>` and comma-separated lists (`extraItems=a,b,<old id>`) in plasmashell's applet
+/// list, with the old plasmoid id replaced by the new one. Whole entries only, so an id that
+/// merely contains the old one is left alone; line endings are kept.
+fn rename_plasmoid_id(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            let body = line.trim_end_matches(['\n', '\r']);
+            let ending = &line[body.len()..];
+            match body.split_once('=') {
+                Some((key, value)) if value.split(',').any(|v| v == OLD_PLASMOID_ID) => {
+                    let new: Vec<&str> = value
+                        .split(',')
+                        .map(|v| if v == OLD_PLASMOID_ID { APP_ID } else { v })
+                        .collect();
+                    format!("{key}={}{ending}", new.join(","))
+                }
+                _ => line.to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Apply [`rename_plasmoid_id`] to the file as it is now, keeping its permissions (it is `0600`).
+fn rewrite_applets(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let new = rename_plasmoid_id(&text);
+    if new == text {
+        return Ok(());
+    }
+    let mode = std::fs::metadata(path)
+        .ok()
+        .map(|m| m.permissions().mode() & 0o7777);
+    config::write_atomic_mode(path, &new, mode).map_err(|e| e.to_string())
 }
 
 /// Carry out one step.
@@ -1049,6 +1132,38 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Mig
             }
             Err(e) => return Err(format!("{} -> {}: {e}", from.display(), to.display()).into()),
         },
+        Step::MergeConfig { path, old } => {
+            let existed = path.exists();
+            TomlStore::new(path.clone())
+                .save_unguarded(&mut |c| {
+                    if existed {
+                        // A front end that ran meanwhile may have saved its own values; the
+                        // old install's settings are what the user chose.
+                        c.rc_addr.clone_from(&old.rc_addr);
+                        c.env_file.clone_from(&old.env_file);
+                        c.service.clone_from(&old.service);
+                        c.mount_path.clone_from(&old.mount_path);
+                        c.cache_dir.clone_from(&old.cache_dir);
+                        c.offline_enabled = old.offline_enabled;
+                        c.pins.clone_from(&old.pins);
+                        c.sync_interval_secs = old.sync_interval_secs;
+                    } else {
+                        *c = Config::clone(old);
+                    }
+                })
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Step::RenamePlasmoid(path) => {
+            if let Err(error) = rewrite_applets(path) {
+                let line = fl!(
+                    "migrate-log-panel-kept",
+                    path = path.display().to_string(),
+                    error = error
+                );
+                eprintln!("{line}");
+                log.push(line);
+            }
+        }
         Step::Write { path, content } => {
             config::write_atomic(path, content).map_err(|e| format!("{}: {e}", path.display()))?;
         }
@@ -1103,20 +1218,46 @@ fn run_limited(env: &Env, limit: Option<usize>) -> Result<Vec<String>, Migration
             .map_err(|e| format!("{}: {e}", env.journal_path().display()))?;
     }
     let mut log = Vec::new();
+    // Until something is moved, written or removed the old install is intact apart from the
+    // stopped services, so a failure puts those back instead of leaving the old keeper off.
+    let mut changed = false;
     for (i, step) in plan.steps.iter().enumerate() {
         if limit.is_some_and(|l| i >= l) {
             return Err(String::from("interrupted").into());
         }
+        changed |= !matches!(step, Step::Systemctl { .. } | Step::WaitQuiet { .. });
         let number: usize = i + 1;
         if let Err(e) = execute_step(env, step, &mut log) {
-            if let (Step::WaitQuiet { .. }, Some(o), Some(j)) =
-                (step, plan.source, plan.journal.as_ref())
-            {
-                // Nothing has moved yet: put the old keeper back and forget the journal, so a
-                // later attempt starts from what is then true.
-                restore_old_keeper(env, o, j, &mut log);
+            if let (false, true, Some(o), Some(j)) = (
+                changed,
+                plan.journal_new,
+                plan.source,
+                plan.journal.as_ref(),
+            ) {
+                let failures = restore_old_keeper(env, o, j);
+                // Forget the journal, so a later attempt starts from what is then true.
                 let _ = std::fs::remove_file(env.journal_path());
-                return Err(e);
+                let message = if matches!(step, Step::WaitQuiet { .. }) {
+                    e.message
+                } else {
+                    fl!(
+                        "migrate-error-step-restored",
+                        number = number,
+                        total = plan.steps.len(),
+                        step = step.to_string(),
+                        error = e.message
+                    )
+                };
+                let message = if failures.is_empty() {
+                    message
+                } else {
+                    fl!(
+                        "migrate-error-restore-failed",
+                        message = message,
+                        errors = failures.join("; ")
+                    )
+                };
+                return Err(MigrationFailure::new(e.code, message));
             }
             return Err(MigrationFailure::new(
                 e.code,
@@ -1144,55 +1285,119 @@ fn run_limited(env: &Env, limit: Option<usize>) -> Result<Vec<String>, Migration
 
 // ---- the lock, and who may migrate when ----
 
-/// Holds the lock file until dropped.
+/// Holds the migration lock (an `flock` on a sidecar file in the state directory) until dropped.
+/// The kernel releases it when the process exits, however it exits, so there is nothing to
+/// clean up and no stale lock to steal. The file itself is never deleted.
 #[derive(Debug)]
-struct LockGuard(PathBuf);
+struct LockGuard(#[allow(dead_code)] std::fs::File);
 
-impl Drop for LockGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+/// How a process that wants to migrate treats a lock somebody else holds.
+#[derive(Debug, Clone, Copy)]
+enum Wait {
+    /// Try once and give up (background threads: they show "pending" meanwhile).
+    Poll,
+    /// Wait up to `max` for the holder to finish; `progress` says so on stderr every ten seconds.
+    Block { max: Duration, progress: bool },
+}
+
+/// What [`acquire_wait`] came back with.
+#[derive(Debug)]
+enum Lock {
+    Held(LockGuard),
+    /// The marker appeared meanwhile: nothing left to do.
+    Done,
+    /// Somebody else still holds it.
+    Busy,
+}
+
+fn open_lock(env: &Env) -> Result<std::fs::File, MigrationFailure> {
+    let path = env.lock_path();
+    let io = |e: std::io::Error| MigrationFailure::from(format!("{}: {e}", path.display()));
+    std::fs::create_dir_all(&env.state_home).map_err(io)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(io)
+}
+
+/// Take the lock, waiting as `wait` says.
+fn acquire_wait(env: &Env, wait: Wait) -> Result<Lock, MigrationFailure> {
+    use std::fs::TryLockError;
+    let file = open_lock(env)?;
+    let (max, progress) = match wait {
+        Wait::Poll => (Duration::ZERO, false),
+        Wait::Block { max, progress } => (max, progress),
+    };
+    let poll = env.poll.max(Duration::from_millis(1));
+    let mut waited = Duration::ZERO;
+    let mut since_note = LOCK_PROGRESS_EVERY;
+    loop {
+        if env.marker().exists() {
+            return Ok(Lock::Done);
+        }
+        match file.try_lock() {
+            Ok(()) => return Ok(Lock::Held(LockGuard(file))),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(e)) => {
+                return Err(format!("{}: {e}", env.lock_path().display()).into())
+            }
+        }
+        if waited >= max {
+            return Ok(Lock::Busy);
+        }
+        if progress && since_note >= LOCK_PROGRESS_EVERY {
+            eprintln!("{}", fl!("migrate-waiting-lock"));
+            since_note = Duration::ZERO;
+        }
+        (env.sleep)(poll);
+        waited += poll;
+        since_note += poll;
     }
 }
 
-/// Take the lock, or wait (up to `wait`) for whoever has it to finish. `Ok(None)` means the
-/// marker appeared meanwhile: nothing left to do.
-fn acquire_wait(env: &Env, wait: Duration) -> Result<Option<LockGuard>, MigrationFailure> {
-    let lock = env.lock_path();
-    let tries = (wait.as_millis() / env.poll.as_millis().max(1)).max(1);
-    for _ in 0..tries {
-        if env.marker().exists() {
-            return Ok(None);
-        }
-        if acquire(&lock) {
-            return Ok(Some(LockGuard(lock)));
-        }
-        (env.sleep)(env.poll);
-    }
-    if env.marker().exists() {
-        return Ok(None);
-    }
-    Err(MigrationFailure::new(
-        MigrateError::LockTimeout,
-        fl!("migrate-error-lock-timeout"),
-    ))
+/// Remember why a migration failed, for [`pending`].
+fn record_failure(env: &Env, e: &MigrationFailure) {
+    let _ = config::write_atomic(&env.error_path(), e.code.code());
 }
 
 /// [`run`] under the lock. A process that finds the lock taken waits for the other to finish
-/// and re-checks the marker. The reason for a failure is kept for [`pending`].
-fn run_locked(env: &Env, wait: Duration) -> Result<Vec<String>, MigrationFailure> {
-    let Some(_guard) = acquire_wait(env, wait)? else {
-        return Ok(vec![]);
+/// (or, with [`Wait::Poll`], leaves it to the other) and re-checks the marker. The reason for a
+/// failure is kept for [`pending`].
+fn run_locked(env: &Env, wait: Wait) -> Result<Vec<String>, MigrationFailure> {
+    let _guard = match acquire_wait(env, wait)? {
+        Lock::Held(g) => g,
+        Lock::Done => return Ok(vec![]),
+        Lock::Busy if matches!(wait, Wait::Poll) => return Ok(vec![]),
+        Lock::Busy => {
+            return Err(MigrationFailure::new(
+                MigrateError::LockTimeout,
+                fl!("migrate-error-lock-timeout"),
+            ))
+        }
     };
     let result = run(env);
     match &result {
         Ok(_) => {
             let _ = std::fs::remove_file(env.error_path());
         }
-        Err(e) => {
-            let _ = config::write_atomic(&env.error_path(), e.code.code());
-        }
+        Err(e) => record_failure(env, e),
     }
     result
+}
+
+/// [`plan`], remembering a failure (conflict, ambiguous) for [`pending`] like a failed run.
+fn planned(env: &Env) -> Result<Plan, MigrationFailure> {
+    plan(env).inspect_err(|e| record_failure(env, e))
+}
+
+/// How long a foreground process waits for another migration to finish.
+fn foreground_wait(env: &Env) -> Wait {
+    Wait::Block {
+        max: env.quiet_timeout + LOCK_EXTRA_WAIT,
+        progress: true,
+    }
 }
 
 /// Is an old install here that hasn't been migrated? Looks at files only.
@@ -1258,7 +1463,7 @@ pub fn guard() -> Result<(), MigrationFailure> {
     guard_status(pending())
 }
 
-fn guard_status(status: MigrationStatus) -> Result<(), MigrationFailure> {
+pub(crate) fn guard_status(status: MigrationStatus) -> Result<(), MigrationFailure> {
     match status {
         MigrationStatus::NotNeeded => Ok(()),
         _ => Err(MigrationFailure::new(
@@ -1306,15 +1511,28 @@ fn with_process_env<T>(f: impl FnOnce(&Env) -> T) -> T {
 
 /// Migrate now if an old install is waiting, in the foreground, printing what happened on
 /// stderr. For the command-line modes: the caller exits non-zero on `Err`. Does nothing for the
-/// dev build and in tests. Waits (up to a minute) if another process is migrating.
+/// dev build and in tests. If another process is migrating, waits for it (with a progress line
+/// every ten seconds) for up to the sync wait plus three minutes.
 ///
 /// # Errors
 /// Why the migration failed (already printed).
 pub fn run_if_needed() -> Result<(), MigrationFailure> {
+    migrate_now(true)
+}
+
+fn migrate_now(foreground: bool) -> Result<(), MigrationFailure> {
     if skip() || (pending() == MigrationStatus::NotNeeded && !xdg_state_marker_missing()) {
         return Ok(());
     }
-    match with_process_env(|env| run_locked(env, LOCK_WAIT)) {
+    let result = with_process_env(|env| {
+        let wait = if foreground {
+            foreground_wait(env)
+        } else {
+            Wait::Poll
+        };
+        run_locked(env, wait)
+    });
+    match result {
         Ok(lines) => {
             for l in &lines {
                 eprintln!("{l}");
@@ -1338,13 +1556,14 @@ fn xdg_state_marker_missing() -> bool {
 
 /// Start the migration on a background thread, if one is needed. For processes that must not
 /// block on it (the Plasma daemon after it owns its bus name, the COSMIC applet): they show
-/// [`pending`] meanwhile. Errors are printed on stderr and kept for [`pending`].
+/// [`pending`] meanwhile. If another process holds the migration lock this one leaves the work
+/// to it. Errors are printed on stderr and kept for [`pending`].
 pub fn spawn_background() -> Option<std::thread::JoinHandle<()>> {
     if pending() == MigrationStatus::NotNeeded {
         return None;
     }
     Some(std::thread::spawn(|| {
-        let _ = run_if_needed();
+        let _ = migrate_now(false);
     }))
 }
 
@@ -1358,12 +1577,12 @@ pub fn command(dry_run: bool) -> Result<String, MigrationFailure> {
         if dry_run {
             plan(env).map(|p| p.to_string())
         } else {
-            let plan = plan(env)?;
+            let plan = planned(env)?;
             if plan.done {
                 return Ok(plan.to_string());
             }
             let mut text = String::new();
-            for line in run_locked(env, LOCK_WAIT)? {
+            for line in run_locked(env, foreground_wait(env))? {
                 let _ = writeln!(text, "{line}");
             }
             Ok(text.trim_end().to_string())
@@ -1380,32 +1599,6 @@ fn refuse_dev(is_dev: bool) -> Result<(), MigrationFailure> {
         ))
     } else {
         Ok(())
-    }
-}
-
-/// Take the lock file. One nobody has touched for ten minutes belongs to a process that died.
-fn acquire(lock: &Path) -> bool {
-    if let Some(dir) = lock.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let create = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(lock)
-            .is_ok()
-    };
-    if create() {
-        return true;
-    }
-    let dead = std::fs::metadata(lock)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .is_none_or(|age| age.as_secs() >= 600);
-    dead && {
-        let _ = std::fs::remove_file(lock);
-        create()
     }
 }
 

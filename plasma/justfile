@@ -32,7 +32,7 @@ ci:
     cargo clippy -p {{name}} -p {{name}}-ui --all-targets --locked -- -D warnings
     cargo test -p {{name}} -p {{name}}-ui --locked
     cmake -B {{dolphin_build}} -S dolphin && cmake --build {{dolphin_build}}
-    just --justfile {{justfile()}} lint-qml
+    just --justfile {{source_directory()}}/../justfile plasma::lint-qml
 
 # qmllint over the Kirigami windows and the plasmoid. Syntax errors and real type errors fail;
 # imports that do not resolve (Kirigami, org.kde.plasma.*, our cxx-qt module, absent on CI) and
@@ -69,10 +69,11 @@ install-user: build-release
     {{prefix}}/bin/{{shared}} --migrate
     sed 's|@BINDIR@|{{prefix}}/bin|' dbus/{{appid}}.service | install -Dm0644 /dev/stdin {{prefix}}/share/dbus-1/services/{{appid}}.service
     -busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig
-    just --justfile {{justfile()}} install-icons
+    just --justfile {{source_directory()}}/../justfile plasma::install-icons
     printf '[Desktop Entry]\nName=rclone UI\nExec={{name}} --settings\nIcon={{icon}}\nType=Application\nNoDisplay=true\n' | install -Dm0644 /dev/stdin {{prefix}}/share/applications/{{desktopid}}.desktop
     kpackagetool6 -t Plasma/Applet -u {{plasmoid}} >/dev/null 2>&1 || kpackagetool6 -t Plasma/Applet -i {{plasmoid}}
     cmake --install {{dolphin_build}}
+    just --justfile {{source_directory()}}/../justfile plasma::reload-plasmashell
     printf 'export QT_PLUGIN_PATH="{{plugindir}}${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"\n' | install -Dm0644 /dev/stdin ~/.config/plasma-workspace/env/{{name}}.sh
     # Restart a running daemon so it picks up the new binary (D-Bus starts it again on demand).
     -pkill -x -f '{{prefix}}/bin/{{name}} --daemon'
@@ -82,6 +83,22 @@ install-user: build-release
     -kpackagetool6 -t Plasma/Applet -r {{oldplasmoid}}
     rm -f {{prefix}}/share/dbus-1/services/{{oldappid}}.service ~/.config/plasma-workspace/env/{{oldname}}.sh {{prefix}}/share/applications/{{oldappid}}.desktop
     if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f {{prefix}}/bin/{{oldname}}; fi
+
+# plasmashell only loads a plasmoid's code, and the panel entry `--migrate` renamed in
+# plasma-org.kde.plasma.desktop-appletsrc, when it starts: restart it if our plasmoid is on a
+# panel or in the tray. Dolphin is left running (its plugins load at its next start).
+reload-plasmashell:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if grep -qs '={{appid}}\(,\|$\)\|,{{appid}}\(,\|$\)' ~/.config/plasma-org.kde.plasma.desktop-appletsrc; then
+        if systemctl --user cat plasma-plasmashell.service >/dev/null 2>&1; then
+            systemctl --user restart plasma-plasmashell.service || true
+        else
+            kquitapp6 plasmashell || true
+            kstart plasmashell || true
+        fi
+    fi
+    echo "Restart Dolphin to load the new plugins (start it with QT_PLUGIN_PATH set until your next login)."
 
 # Removes this version's files and the ones earlier versions (rclone-plasma) installed. The
 # offline-folder units go first; the shared binary stays while the COSMIC front end needs it.
