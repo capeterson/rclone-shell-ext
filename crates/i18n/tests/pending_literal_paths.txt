@@ -3,7 +3,6 @@
 # that no longer contains a violation fails the test, so this list can only shrink: delete a
 # line when you convert the file.
 cosmic/src/app.rs
-cosmic/src/settings.rs
 plasma/dolphin/actions/rclonefileitemaction.cpp
 plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/config/config.qml
 plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/FullRepresentation.qml

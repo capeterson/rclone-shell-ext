@@ -274,7 +274,25 @@ cosmic-details-open-file = File
 ## end zone: cosmic-details
 
 ## zone: cosmic-settings
-
+cosmic-settings-window-title = rclone UI settings
+cosmic-settings-section-offline = Offline folders
+cosmic-settings-section-general = General
+cosmic-settings-section-activity = Recent offline activity
+cosmic-settings-offline-toggle = Keep folders available offline
+cosmic-settings-context-menu = Show “rclone…” in the Files right-click menu
+cosmic-settings-step-done = Done
+cosmic-settings-step-todo = To do
+cosmic-settings-setting-up = Setting up…
+cosmic-settings-setup-incomplete = Setup isn't complete
+cosmic-settings-setup-button = Set up
+cosmic-settings-no-pins = No folders are kept offline yet
+cosmic-settings-no-pins-hint = In Files, right-click a folder in the Drive folder, choose “rclone…”, then “Keep offline”.
+cosmic-settings-repair = Repair
+cosmic-settings-open = Open
+cosmic-settings-remove = Remove
+cosmic-settings-cancel = Cancel
+cosmic-settings-consent-title = Turn on offline folders?
+cosmic-settings-consent-body = Keeping folders offline needs these changes. Nothing has been changed yet.
 ## end zone: cosmic-settings
 
 ## zone: panel (health-, panel-, dolphin-, plasmoid)

@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The settings window (`--settings`, or "Settings…" in the panel popup).
 //!
-//! Its main job is offline folders: turning them on walks through the one-time setup they need
-//! (a line in `/etc/fuse.conf`, granted through the system's password prompt; the keeper's
-//! systemd units; one restart of the Drive mount), then lists the folders kept offline.
+//! Its main job is offline folders. What the window says and the consent -> setup -> rollback
+//! flow live in `rclone_ui_view::settings` (shared with the Plasma window); this file is the
+//! iced widgets, messages and worker tasks around it.
 
 use crate::config::{Config, ConfigExt, ConfigWatch, WATCH_EVERY};
-use crate::offline_setup::{consent_items, set_up, setup_steps, tear_down, turn_on, Checks};
-use crate::pin::{self, OfflineState, Phase};
+use crate::offline_setup::{set_up, tear_down, turn_on, Checks};
+use crate::pin::{self, OfflineState};
 use crate::{keeper, share};
 use cosmic::app::Settings;
 use cosmic::iced::{time, Alignment, Length, Size, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget::{self, settings};
-use std::time::Duration;
-
-const REFRESH: Duration = Duration::from_secs(2);
+use rclone_ui_i18n::fl;
+use rclone_ui_view::settings::{ConsentAction, SettingsState, ToggleAction};
+use rclone_ui_view::REFRESH;
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -37,17 +37,8 @@ enum Message {
 
 struct App {
     core: cosmic::Core,
-    cfg: Config,
+    st: SettingsState,
     config_watch: ConfigWatch,
-    checks: Checks,
-    state: OfflineState,
-    /// A setup or teardown is running; buttons are disabled.
-    busy: bool,
-    error: Option<String>,
-    /// Something worth telling after a successful setup (where the backup went).
-    note: Option<String>,
-    /// The consent dialog is showing; nothing has been changed yet.
-    consent: bool,
 }
 
 type Task = cosmic::app::Task<Message>;
@@ -81,17 +72,11 @@ impl cosmic::Application for App {
 
     fn init(mut core: cosmic::Core, cfg: Config) -> (Self, Task) {
         core.window.show_maximize = false;
-        core.set_header_title("rclone UI settings".into());
+        core.set_header_title(fl!("cosmic-settings-window-title"));
         let app = App {
             core,
-            cfg,
+            st: SettingsState::new(cfg),
             config_watch: ConfigWatch::default(),
-            checks: Checks::default(),
-            state: OfflineState::default(),
-            busy: false,
-            error: None,
-            note: None,
-            consent: false,
         };
         (app, Task::done(cosmic::Action::App(Message::Refresh)))
     }
@@ -106,80 +91,60 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task {
         match message {
             Message::Refresh => {
-                let cfg = self.cfg.clone();
+                let cfg = self.st.cfg.clone();
                 return blocking(
                     move || (Checks::probe(&cfg), OfflineState::load()),
                     |(c, s)| Message::Refreshed(c, s),
                 );
             }
             Message::Refreshed(c, s) => {
-                self.checks = c;
-                self.state = s;
+                self.st.checks = c;
+                self.st.state = s;
             }
             Message::ConfigTick => {
                 if let Some(c) = self.config_watch.poll() {
-                    self.cfg = c;
+                    self.st.cfg = c;
                 }
             }
             Message::ToggleOffline(on) => {
-                self.error = None;
-                if on {
-                    // Explain first; nothing is changed until the user continues.
-                    self.consent = true;
-                } else {
-                    self.busy = true;
-                    self.cfg.offline_enabled = false;
-                    let cfg = self.cfg.clone();
+                if self.st.toggle_offline(on) == ToggleAction::TearDown {
+                    let cfg = self.st.cfg.clone();
                     return blocking(move || tear_down(&cfg), Message::Done);
                 }
             }
-            Message::SetUp => {
-                self.error = None;
-                self.consent = true;
-            }
+            Message::SetUp => self.st.request_setup(),
             Message::Consent(go) => {
-                self.consent = false;
-                if !go {
-                    // Nothing was saved or changed, so the switch simply stays off.
-                    return Task::none();
-                }
-                self.busy = true;
-                let cfg = self.cfg.clone();
-                return if cfg.offline_enabled {
-                    blocking(move || set_up(&cfg), Message::Done)
-                } else {
-                    self.cfg.offline_enabled = true;
-                    blocking(move || turn_on(&cfg), Message::Done)
+                let action = self.st.answer_consent(go);
+                let cfg = self.st.cfg.clone();
+                return match action {
+                    ConsentAction::Cancel => Task::none(),
+                    ConsentAction::SetUp => blocking(move || set_up(&cfg), Message::Done),
+                    ConsentAction::TurnOn => blocking(move || turn_on(&cfg), Message::Done),
                 };
             }
             Message::Done(r) => {
-                self.busy = false;
-                (self.note, self.error) = match r {
-                    Ok(note) => (note, None),
-                    Err(e) => (None, Some(e)),
-                };
                 // A failed turn-on switches itself back off; show that now, not on the next
                 // config notification.
-                self.cfg = Config::load();
+                self.st.finish(r, Config::load());
                 return self.update(Message::Refresh);
             }
             Message::Unpin(rel) => {
                 if let Err(e) = Config::save(|c| c.pins.retain(|p| *p != rel)) {
-                    self.error = Some(e);
+                    self.st.error = Some(e);
                 }
             }
             Message::Repair(rel) => {
                 if let Err(e) = keeper::request_repair(&rel) {
-                    self.error = Some(e.to_string());
+                    self.st.error = Some(e.to_string());
                 }
             }
             Message::Open(rel) => {
-                share::open_url(&pin::mount_point(&self.cfg, &rel).to_string_lossy());
+                share::open_url(&pin::mount_point(&self.st.cfg, &rel).to_string_lossy());
             }
             Message::ToggleContextMenu(on) => match Config::save(|c| c.context_menu = on) {
                 Ok(_) if on => crate::context_menu::install(),
                 Ok(_) => crate::context_menu::remove(),
-                Err(e) => self.error = Some(e),
+                Err(e) => self.st.error = Some(e),
             },
         }
         Task::none()
@@ -188,11 +153,10 @@ impl cosmic::Application for App {
     /// Informed consent before setup changes anything: what will change, then Continue (on to
     /// the password prompt) or Cancel (nothing is changed and the switch stays off).
     fn dialog(&self) -> Option<Element<'_, Message>> {
-        if !self.consent {
+        if !self.st.consent {
             return None;
         }
-        let items = consent_items(self.checks, &self.cfg);
-        let list = items.into_iter().fold(
+        let list = self.st.consent_items().into_iter().fold(
             widget::column::with_capacity(8).spacing(cosmic::theme::spacing().space_s),
             |col, (title, detail)| {
                 col.push(
@@ -203,43 +167,44 @@ impl cosmic::Application for App {
                 )
             },
         );
-        let needs_password = !self.checks.fuse_conf;
-        let go = if needs_password {
-            "Continue to password prompt"
-        } else {
-            "Continue"
-        };
         Some(
             widget::dialog()
-                .title("Turn on offline folders?")
+                .title(fl!("cosmic-settings-consent-title"))
                 .icon(widget::icon::from_name("folder-download-symbolic").size(64))
-                .body("Keeping folders offline needs these changes. Nothing has been changed yet.")
+                .body(fl!("cosmic-settings-consent-body"))
                 .control(widget::container(widget::scrollable(list)).max_height(360.0))
-                .primary_action(widget::button::suggested(go).on_press(Message::Consent(true)))
+                .primary_action(
+                    widget::button::suggested(self.st.consent_go_label())
+                        .on_press(Message::Consent(true)),
+                )
                 .secondary_action(
-                    widget::button::standard("Cancel").on_press(Message::Consent(false)),
+                    widget::button::standard(fl!("cosmic-settings-cancel"))
+                        .on_press(Message::Consent(false)),
                 )
                 .into(),
         )
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let mut sections: Vec<Element<'_, Message>> = vec![self.offline_section()];
-        if self.cfg.offline_enabled && !self.state.notices.is_empty() {
-            sections.push(self.notices_section());
+        let now = jiff::Timestamp::now().as_second();
+        let mut sections: Vec<Element<'_, Message>> = vec![self.offline_section(now)];
+        let notices = self.st.notices(now);
+        if !notices.is_empty() {
+            sections.push(Self::notices_section(notices));
         }
         sections.push(
             settings::section()
-                .title("General")
+                .title(fl!("cosmic-settings-section-general"))
                 .add(
-                    settings::item::builder("Show “rclone…” in the Files right-click menu")
-                        .toggler(self.cfg.context_menu, Message::ToggleContextMenu),
+                    // The one COSMIC-only control: COSMIC Files has an extension point of its own.
+                    settings::item::builder(fl!("cosmic-settings-context-menu"))
+                        .toggler(self.st.cfg.context_menu, Message::ToggleContextMenu),
                 )
                 .into(),
         );
         for (icon, text) in [
-            ("dialog-information-symbolic", &self.note),
-            ("dialog-error-symbolic", &self.error),
+            ("dialog-information-symbolic", &self.st.note),
+            ("dialog-error-symbolic", &self.st.error),
         ] {
             if let Some(t) = text {
                 sections.push(
@@ -268,122 +233,111 @@ impl App {
         &self,
         mut sec: settings::Section<'a, Message>,
     ) -> settings::Section<'a, Message> {
-        for (title, desc, done) in setup_steps(self.checks) {
-            let icon = if done {
-                "emblem-ok-symbolic"
+        for (title, desc, done) in rclone_ui_core::offline_setup::setup_steps(self.st.checks) {
+            let (icon, status) = if done {
+                ("emblem-ok-symbolic", fl!("cosmic-settings-step-done"))
             } else {
-                "dialog-information-symbolic"
+                (
+                    "dialog-information-symbolic",
+                    fl!("cosmic-settings-step-todo"),
+                )
             };
             sec = sec.add(
                 settings::item::builder(title)
                     .description(desc)
                     .icon(widget::icon::from_name(icon).size(16))
-                    .control(widget::text::caption(if done { "Done" } else { "To do" })),
+                    .control(widget::text::caption(status)),
             );
         }
         // Setup starts from the switch; this button only picks up after something undid part
         // of it (say the drop-in was deleted). Both go through the consent dialog.
-        sec.add(if self.busy {
-            settings::item::builder("Setting up…")
-                .description("Enter your password if asked. The Drive mount restarts once.")
+        let hint = self.st.setup_hint();
+        sec.add(if self.st.busy {
+            settings::item::builder(fl!("cosmic-settings-setting-up"))
+                .description(hint)
                 .control(widget::Space::new())
         } else {
-            settings::item::builder("Setup isn't complete")
-                .description(if self.checks.mounted {
-                    "Runs the remaining steps above."
-                } else {
-                    "The Drive mount isn't running; setup will start it."
-                })
-                .control(widget::button::suggested("Set up").on_press(Message::SetUp))
+            settings::item::builder(fl!("cosmic-settings-setup-incomplete"))
+                .description(hint)
+                .control(
+                    widget::button::suggested(fl!("cosmic-settings-setup-button"))
+                        .on_press(Message::SetUp),
+                )
         })
     }
 
-    fn offline_section(&self) -> Element<'_, Message> {
-        let can_turn_off = self.cfg.pins.is_empty() && !self.busy;
-        let description = if self.cfg.offline_enabled && !self.cfg.pins.is_empty() {
-            "Stop keeping every folder offline before turning this off."
-        } else {
-            "Folders you choose are fully downloaded, kept in sync both ways, and work without a \
-             connection, right where they are in the Drive folder."
-        };
-        let toggle_allowed =
-            !self.busy && !self.consent && (!self.cfg.offline_enabled || can_turn_off);
-        let mut sec = settings::section().title("Offline folders").add(
-            settings::item::builder("Keep folders available offline")
-                .description(description)
-                .toggler_maybe(
-                    self.cfg.offline_enabled || self.consent,
-                    toggle_allowed.then_some(Message::ToggleOffline),
-                ),
-        );
-        if !self.cfg.offline_enabled {
+    fn offline_section(&self, now: i64) -> Element<'_, Message> {
+        let mut sec = settings::section()
+            .title(fl!("cosmic-settings-section-offline"))
+            .add(
+                settings::item::builder(fl!("cosmic-settings-offline-toggle"))
+                    .description(self.st.description())
+                    .toggler_maybe(
+                        self.st.toggle_checked(),
+                        self.st.toggle_allowed().then_some(Message::ToggleOffline),
+                    ),
+            );
+        if !self.st.cfg.offline_enabled {
             return sec.into();
         }
-        if !self.checks.complete() {
+        if self.st.show_setup() {
             return self.setup_rows(sec).into();
         }
-        if self.cfg.pins.is_empty() {
-            sec = sec.add(settings::item::builder("No folders are kept offline yet").description(
-                "In Files, right-click a folder in the Drive folder, choose “rclone…”, then \
-                 “Keep offline”.",
-            ).control(widget::Space::new()));
+        if self.st.cfg.pins.is_empty() {
+            sec = sec.add(
+                settings::item::builder(fl!("cosmic-settings-no-pins"))
+                    .description(fl!("cosmic-settings-no-pins-hint"))
+                    .control(widget::Space::new()),
+            );
         }
-        let now = jiff::Timestamp::now();
-        for rel in &self.cfg.pins {
-            let p = self.state.pin(rel);
-            let phase = p.map_or(Phase::Downloading, |p| p.phase);
-            let mut desc = pin::describe(p, None);
-            if let Some(t) = p
-                .and_then(|p| p.last_sync)
-                .filter(|_| !p.is_some_and(|p| p.syncing))
-            {
-                let when = crate::app::ago(now, jiff::Timestamp::from_second(t).ok());
-                desc = format!("{desc} · synced {when}");
+        for row in self.st.pin_rows(now) {
+            let icon = widget::icon::from_name(row.icon.clone()).size(16);
+            if row.removing {
+                // Removed but still being cleaned up: no buttons.
+                let desc = if row.error.is_empty() {
+                    row.label
+                } else {
+                    format!("{}\n{}", row.label, row.error)
+                };
+                sec = sec.add(
+                    settings::item::builder(row.rel)
+                        .description(desc)
+                        .icon(icon)
+                        .control(widget::Space::new()),
+                );
+                continue;
             }
             let mut buttons = widget::row::with_capacity(3).spacing(8);
-            if phase == Phase::Attention {
+            if row.can_repair {
                 buttons = buttons.push(
-                    widget::button::standard("Repair").on_press(Message::Repair(rel.clone())),
+                    widget::button::standard(fl!("cosmic-settings-repair"))
+                        .on_press(Message::Repair(row.rel.clone())),
                 );
             }
             buttons = buttons
-                .push(widget::button::standard("Open").on_press(Message::Open(rel.clone())))
-                .push(widget::button::destructive("Remove").on_press(Message::Unpin(rel.clone())));
+                .push(
+                    widget::button::standard(fl!("cosmic-settings-open"))
+                        .on_press(Message::Open(row.rel.clone())),
+                )
+                .push(
+                    widget::button::destructive(fl!("cosmic-settings-remove"))
+                        .on_press(Message::Unpin(row.rel.clone())),
+                );
             sec = sec.add(
-                settings::item::builder(rel.as_str())
-                    .description(desc)
-                    .icon(widget::icon::from_name(phase.icon()).size(16))
+                settings::item::builder(row.rel)
+                    .description(row.label)
+                    .icon(icon)
                     .control(buttons),
-            );
-        }
-        // Folders that were removed but are still being cleaned up.
-        for p in self
-            .state
-            .pins
-            .iter()
-            .filter(|p| !self.cfg.pins.contains(&p.rel))
-        {
-            let desc = p.error.as_ref().map_or_else(
-                || Phase::Removing.label(),
-                |e| format!("{}\n{}", Phase::Removing.label(), e.label()),
-            );
-            sec = sec.add(
-                settings::item::builder(p.rel.as_str())
-                    .description(desc)
-                    .icon(widget::icon::from_name(Phase::Removing.icon()).size(16))
-                    .control(widget::Space::new()),
             );
         }
         sec.into()
     }
 
-    fn notices_section(&self) -> Element<'_, Message> {
-        let now = jiff::Timestamp::now();
-        let mut sec = settings::section().title("Recent offline activity");
-        for n in self.state.notices.iter().rev().take(5) {
-            let when = crate::app::ago(now, jiff::Timestamp::from_second(n.at).ok());
+    fn notices_section(notices: Vec<(String, String)>) -> Element<'static, Message> {
+        let mut sec = settings::section().title(fl!("cosmic-settings-section-activity"));
+        for (text, when) in notices {
             sec = sec.add(
-                settings::item::builder(n.text.label())
+                settings::item::builder(text)
                     .description(when)
                     .control(widget::Space::new()),
             );
@@ -394,6 +348,7 @@ impl App {
 
 /// Open the window and block until it closes.
 pub fn run(cfg: Config) -> cosmic::iced::Result {
+    rclone_ui_i18n::init();
     let settings = Settings::default().size(Size::new(600.0, 680.0));
     cosmic::app::run::<App>(settings, cfg)
 }
