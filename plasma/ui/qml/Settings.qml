@@ -13,7 +13,7 @@ import com.ca_peterson.RcloneShellExt
 Kirigami.ApplicationWindow {
     id: root
 
-    title: "rclone settings"
+    title: Strings.t("settings-window-title")
     width: Kirigami.Units.gridUnit * 36
     height: Kirigami.Units.gridUnit * 40
     minimumWidth: Kirigami.Units.gridUnit * 24
@@ -38,13 +38,13 @@ Kirigami.ApplicationWindow {
 
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
     pageStack.initialPage: FormCard.FormCardPage {
-        title: "rclone settings"
+        title: Strings.t("settings-window-title")
 
         // Offline folders
-        FormCard.FormHeader { title: "Offline folders" }
+        FormCard.FormHeader { title: Strings.t("settings-heading-offline") }
         FormCard.FormCard {
             FormCard.FormSwitchDelegate {
-                text: "Keep folders available offline"
+                text: Strings.t("settings-keep-offline-switch")
                 description: settings.description
                 // Bound to the model, and flipping it is a request, not a change: the model
                 // decides (consent first) and the binding is restored from its state.
@@ -72,7 +72,7 @@ Kirigami.ApplicationWindow {
                             implicitHeight: Kirigami.Units.iconSizes.small
                         }
                         QQC2.Label {
-                            text: step.modelData.done ? "Done" : "To do"
+                            text: step.modelData.done ? Strings.t("settings-step-done") : Strings.t("settings-step-todo")
                             font: Kirigami.Theme.smallFont
                         }
                     }
@@ -81,7 +81,7 @@ Kirigami.ApplicationWindow {
             FormCard.FormButtonDelegate {
                 visible: settings.showSetup
                 enabled: !settings.busy
-                text: settings.busy ? "Setting up…" : "Setup isn't complete"
+                text: settings.busy ? Strings.t("settings-setting-up") : Strings.t("settings-setup-incomplete")
                 description: settings.setupHint
                 icon.name: "run-build"
                 onClicked: settings.requestSetup()
@@ -90,13 +90,13 @@ Kirigami.ApplicationWindow {
             // The folders kept offline
             FormCard.FormPlaceholderMessageDelegate {
                 visible: settings.showPins && settings.noPins
-                text: "No folders are kept offline yet"
+                text: Strings.t("settings-no-pins")
                 icon.name: "folder-download"
                 // Shown as the card's body: how to add one.
             }
             FormCard.FormTextDelegate {
                 visible: settings.showPins && settings.noPins
-                description: "In Dolphin, right-click a folder in the Drive folder, choose “rclone”, then “Keep offline”."
+                description: Strings.t("settings-no-pins-hint")
             }
             Repeater {
                 model: settings.showPins ? root.pins : []
@@ -137,19 +137,19 @@ Kirigami.ApplicationWindow {
                         }
                         QQC2.Button {
                             visible: pinRow.modelData.canRepair
-                            text: "Repair"
+                            text: Strings.t("settings-pin-repair")
                             icon.name: "tools-wizard"
                             onClicked: settings.repair(pinRow.modelData.rel)
                         }
                         QQC2.Button {
                             visible: !pinRow.modelData.removing
-                            text: "Open"
+                            text: Strings.t("settings-pin-open")
                             icon.name: "document-open-folder"
                             onClicked: settings.openPin(pinRow.modelData.rel)
                         }
                         QQC2.Button {
                             visible: !pinRow.modelData.removing
-                            text: "Remove"
+                            text: Strings.t("settings-pin-remove")
                             icon.name: "edit-delete"
                             onClicked: settings.remove(pinRow.modelData.rel)
                         }
@@ -161,7 +161,7 @@ Kirigami.ApplicationWindow {
         // Recent offline activity
         FormCard.FormHeader {
             visible: settings.offlineEnabled && root.notices.length > 0
-            title: "Recent offline activity"
+            title: Strings.t("settings-heading-activity")
         }
         FormCard.FormCard {
             visible: settings.offlineEnabled && root.notices.length > 0
@@ -177,10 +177,10 @@ Kirigami.ApplicationWindow {
         }
 
         // Dolphin integration
-        FormCard.FormHeader { title: "Dolphin integration" }
+        FormCard.FormHeader { title: Strings.t("settings-heading-dolphin") }
         FormCard.FormCard {
             FormCard.FormSwitchDelegate {
-                text: "Show “rclone” in Dolphin's right-click menu"
+                text: Strings.t("settings-dolphin-menu-switch")
                 checked: settings.contextMenu
                 onToggled: {
                     settings.saveContextMenu(checked);
@@ -188,8 +188,8 @@ Kirigami.ApplicationWindow {
                 }
             }
             FormCard.FormTextDelegate {
-                text: "Sync status in Dolphin"
-                description: "Dolphin's plugins show sync emblems on files in the Drive folder and add an “rclone” action for details, offline folders and sharing. They talk to the rclone-shell-ext-plasma background service over D-Bus."
+                text: Strings.t("settings-dolphin-status-title")
+                description: Strings.t("settings-dolphin-status-detail")
             }
         }
 
@@ -216,7 +216,7 @@ Kirigami.ApplicationWindow {
     Kirigami.Dialog {
         id: consentDialog
         visible: settings.consentVisible
-        title: "Turn on offline folders?"
+        title: Strings.t("settings-consent-title")
         padding: Kirigami.Units.largeSpacing
         preferredWidth: Kirigami.Units.gridUnit * 28
         closePolicy: QQC2.Popup.CloseOnEscape
@@ -228,7 +228,7 @@ Kirigami.ApplicationWindow {
                 onTriggered: settings.answerConsent(true)
             },
             Kirigami.Action {
-                text: "Cancel"
+                text: Strings.t("settings-consent-cancel")
                 icon.name: "dialog-cancel"
                 onTriggered: settings.answerConsent(false)
             }
@@ -240,7 +240,7 @@ Kirigami.ApplicationWindow {
             QQC2.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: "Keeping folders offline needs these changes. Nothing has been changed yet."
+                text: Strings.t("settings-consent-intro")
             }
             Repeater {
                 model: root.consentItems

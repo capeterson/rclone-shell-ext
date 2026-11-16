@@ -271,7 +271,37 @@ migrate-failed = rclone-shell-ext: migrating the old install failed: { $error }
 ## end zone: panel
 
 ## zone: kirigami (plasma/ui windows)
-
+details-window-title = rclone
+details-checking-sync-status = Checking sync status…
+details-heading-sync-status = Sync status
+details-heading-sharing = Sharing
+details-column-name = Name
+details-column-role = Role
+details-column-type = Type
+details-open = Open
+details-open-folder = Folder
+details-open-file = File
+details-stop-keeping-offline = Stop keeping offline
+settings-window-title = rclone settings
+settings-heading-offline = Offline folders
+settings-keep-offline-switch = Keep folders available offline
+settings-step-done = Done
+settings-step-todo = To do
+settings-setting-up = Setting up…
+settings-setup-incomplete = Setup isn't complete
+settings-no-pins = No folders are kept offline yet
+settings-no-pins-hint = In Dolphin, right-click a folder in the Drive folder, choose “rclone”, then “Keep offline”.
+settings-pin-repair = Repair
+settings-pin-open = Open
+settings-pin-remove = Remove
+settings-heading-activity = Recent offline activity
+settings-heading-dolphin = Dolphin integration
+settings-dolphin-menu-switch = Show “rclone” in Dolphin's right-click menu
+settings-dolphin-status-title = Sync status in Dolphin
+settings-dolphin-status-detail = Dolphin's plugins show sync emblems on files in the Drive folder and add an “rclone” action for details, offline folders and sharing. They talk to the background service over D-Bus.
+settings-consent-title = Turn on offline folders?
+settings-consent-intro = Keeping folders offline needs these changes. Nothing has been changed yet.
+settings-consent-cancel = Cancel
 ## end zone: kirigami
 
 ## zone: core-errors

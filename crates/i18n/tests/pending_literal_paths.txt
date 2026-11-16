@@ -10,5 +10,3 @@ plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/config/config.qml
 plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/FullRepresentation.qml
 plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/configGeneral.qml
 plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/main.qml
-plasma/ui/qml/Details.qml
-plasma/ui/qml/Settings.qml
