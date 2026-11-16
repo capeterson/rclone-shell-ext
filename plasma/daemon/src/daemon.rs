@@ -174,7 +174,7 @@ impl Service {
     ) -> zbus::Result<()>;
 
     fn get_config(&self) -> String {
-        setconfig::get_json(&store().load())
+        setconfig::get_json(store().load_checked())
     }
 
     fn set_config(&self, json: &str) -> String {
