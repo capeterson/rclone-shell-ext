@@ -63,6 +63,10 @@ install-icons:
 install-user: build-release
     install -Dm0755 {{target}}/release/{{name}} {{prefix}}/bin/{{name}}
     install -Dm0755 {{target}}/release/{{shared}} {{prefix}}/bin/{{shared}}
+    # Move an old rclone-plasma / cosmic-rclone-ui install over, in the foreground: a failure
+    # stops the recipe with the reason and leaves every old file in place (the old plasmoid and
+    # daemon keep working).
+    {{prefix}}/bin/{{shared}} --migrate
     sed 's|@BINDIR@|{{prefix}}/bin|' dbus/{{appid}}.service | install -Dm0644 /dev/stdin {{prefix}}/share/dbus-1/services/{{appid}}.service
     -busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig
     just --justfile {{justfile()}} install-icons
@@ -73,6 +77,11 @@ install-user: build-release
     # Restart a running daemon so it picks up the new binary (D-Bus starts it again on demand).
     -pkill -x -f '{{prefix}}/bin/{{name}} --daemon'
     -pkill -x -f '{{prefix}}/bin/{{oldname}} --daemon'
+    # The migration succeeded (the recipe would have stopped): take the old install's files away.
+    # The old binary stays while old units (an install the migration did not pick) still call it.
+    -kpackagetool6 -t Plasma/Applet -r {{oldplasmoid}}
+    rm -f {{prefix}}/share/dbus-1/services/{{oldappid}}.service ~/.config/plasma-workspace/env/{{oldname}}.sh {{prefix}}/share/applications/{{oldappid}}.desktop
+    if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f {{prefix}}/bin/{{oldname}}; fi
 
 # Removes this version's files and the ones earlier versions (rclone-plasma) installed. The
 # offline-folder units go first; the shared binary stays while the COSMIC front end needs it.

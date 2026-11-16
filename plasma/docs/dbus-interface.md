@@ -69,7 +69,9 @@ Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-s
     "enabled": true,
     "pins": [{"rel": "Projects", "phase": "Ready", "phaseLabel": "Available offline",
               "phaseIcon": "emblem-ok-symbolic", "error": null}]
-  }
+  },
+  "migration": "none",
+  "migrationLabel": ""
 }
 ```
 
@@ -78,6 +80,7 @@ Notes on the fields:
 - `direction` is `"Upload"`, `"Download"`, or `null`.
 - `kind` is `"Created"`, `"Updated"`, `"Deleted"`, or `null`.
 - `mimeIcon` is a freedesktop icon name chosen from the file name only.
+- `migration` is the state of the one-time move from the old `rclone-plasma` / `cosmic-rclone-ui` installs (`core::migrate::pending`). It is a code: `none` (nothing to do), `pending` (an old install is waiting; the daemon is moving it in the background), or the reason the last attempt failed: `ambiguous`, `conflict`, `sync-in-flight`, `mount-in-use`, `lock-timeout`, `failed`. While it is not `none`, offline folders can't be turned on or pinned. `migrationLabel` is the finished, translated text for it (empty when `none`); show it as a banner. The daemon starts the migration on a background thread after it owns its bus name, so activation never waits for it.
 
 ## Overlay emblems (`FileStates`)
 

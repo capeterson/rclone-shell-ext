@@ -53,5 +53,7 @@ fn main() -> cosmic::iced::Result {
     if let Some(code) = rclone_shell_ext_cli::run(&args) {
         std::process::exit(code);
     }
+    // Move an old install over in the background; the applet shows `migrate::pending()` meanwhile.
+    let _ = rclone_ui_core::migrate::spawn_background();
     cosmic::applet::run::<app::AppModel>(())
 }

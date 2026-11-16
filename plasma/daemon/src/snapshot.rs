@@ -33,6 +33,11 @@ pub struct StatusJson {
     pub transfers: Vec<TransferJson>,
     pub recent: Vec<RecentJson>,
     pub offline: OfflineJson,
+    // --- migration (rclone_ui_core::migrate::pending) ---
+    /// `none`, `pending`, or a failure code (see the D-Bus contract).
+    pub migration: String,
+    /// Finished text for `migration`; empty when it is `none`.
+    pub migration_label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -214,6 +219,8 @@ pub fn build(
             })
             .collect(),
         offline: offline_json(cfg, offline),
+        migration: rclone_ui_core::migrate::pending().code().into(),
+        migration_label: rclone_ui_core::migrate::pending().label(),
     }
 }
 
@@ -242,6 +249,8 @@ pub fn loading() -> StatusJson {
             enabled: false,
             pins: Vec::new(),
         },
+        migration: "none".into(),
+        migration_label: String::new(),
     }
 }
 
