@@ -46,12 +46,26 @@ install-user: build-release
     if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f ~/.local/bin/{{oldname}}; fi
 
 # Removes this version's files and the ones earlier versions (cosmic-rclone-ui) installed. The
-# offline-folder units go first; the shared binary stays while the Plasma front end needs it.
+# offline-folder units, drop-in and `offline_enabled` are shared with the Plasma front end, so
+# they and the shared binary only go when Plasma is not installed. `--offline-remove` runs first:
+# if it refuses (folders are still kept offline) nothing has been touched yet.
 uninstall-user:
-    if [ -x ~/.local/bin/{{shared}} ]; then ~/.local/bin/{{shared}} --offline-remove; fi
-    if [ -x ~/.local/bin/{{oldname}} ]; then ~/.local/bin/{{oldname}} --offline-remove; fi
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The pre-rename install: only if it was never migrated (a migration already removed its units,
+    # and its old config still lists pins, so its --offline-remove would refuse forever). Runs first:
+    # it is the step that can refuse, and nothing has been removed yet.
+    marker="${XDG_STATE_HOME:-$HOME/.local/state}/rclone-shell-ext/migrated-v1"
+    if [ ! -e "$marker" ] && [ -x ~/.local/bin/{{oldname}} ]; then
+        ~/.local/bin/{{oldname}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    plasma_present=false
+    if [ -e ~/.local/bin/rclone-shell-ext-plasma ]; then plasma_present=true; fi
+    if [ "$plasma_present" = false ] && [ -x ~/.local/bin/{{shared}} ]; then
+        ~/.local/bin/{{shared}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
     rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{old_icon}}.svg
-    if [ ! -e ~/.local/bin/rclone-shell-ext-plasma ]; then rm -f ~/.local/bin/{{shared}}; fi
+    if [ "$plasma_present" = false ]; then rm -f ~/.local/bin/{{shared}}; fi
     rm -f ~/.local/bin/{{oldname}} ~/.local/share/applications/{{oldappid}}.desktop
 
 devid := 'com.ca-peterson.rclone-shell-ext-dev'

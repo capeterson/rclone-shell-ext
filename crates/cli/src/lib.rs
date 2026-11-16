@@ -235,6 +235,13 @@ mod tests {
     }
 
     #[test]
+    fn still_pinned_message_is_plural_aware() {
+        rclone_ui_i18n::init();
+        assert!(fl!("cli-offline-still-pinned", count = 1).starts_with("1 folder is still"));
+        assert!(fl!("cli-offline-still-pinned", count = 3).starts_with("3 folders are still"));
+    }
+
+    #[test]
     fn unit_modes_are_recognised() {
         assert!(is_unit_mode(&a(&["--offline-keeper"])));
         assert!(is_unit_mode(&a(&["--pin-mount", "x"])));

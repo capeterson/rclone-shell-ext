@@ -19,11 +19,13 @@ This is the single contract between the Rust daemon (`rclone-shell-ext-plasma --
 
 Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-shell-ext-stopped`, `-unmounted`, `-unreachable`, `-full`, `-error`, `-uploading`, `-downloading`, `-transferring`, `-synced`, and `-loading`. These are installed from `resources/emblems/<kebab>.svg`.
 
+`StatusJson.healthIcon` is the finished icon-theme name for the current health (`rclone-shell-ext-loading` before the first poll); the plasmoid shows it as is and never builds the name itself. If the daemon never starts (or never answers `Strings()`), the plasmoid has no wording yet and shows a busy indicator, retrying until the daemon answers.
+
 ## Methods
 
 | Signature | Meaning |
 |---|---|
-| `ServiceAction(s verb) -> b` | `verb` ∈ `restart`, `stop`, `start` (runs `systemctl --user <verb> <service>`). |
+| `ServiceAction(s verb) -> b` | `verb` ∈ `restart`, `stop`, `start` (runs `systemctl --user <verb> <service>` on a background thread; the reply says the verb was accepted, not that systemctl succeeded, and returns at once). |
 | `OpenFolder()` | Opens the mount path with `xdg-open`. |
 | `OpenDetails(s path)` | Spawns `rclone-shell-ext-plasma --menu <path>`. `path` is an absolute local path, or remote-relative if it doesn't start with `/`. |
 | `OpenSettings()` | Spawns `rclone-shell-ext-plasma --settings`. |
@@ -43,6 +45,7 @@ Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-s
 ```json
 {
   "health": "Uploading",
+  "healthIcon": "rclone-shell-ext-uploading",
   "healthLabel": "Uploading 3 files",
   "serviceActive": true,
   "mounted": true,
@@ -95,7 +98,7 @@ Notes on the fields:
 - `transfers[].line` and `recent[].caption` are finished one-line descriptions (name/progress/speed, and folder/size/age/count). `kindIcon` is a freedesktop icon name.
 - `offline.line` is the one-line offline summary (or a nudge to finish setup); `pins[].detail` is `phaseLabel` followed by the error when there is one.
 - Wording that needs no arguments (button labels, headings) comes from `Strings()`, not from here.
-- `migration` is the state of the one-time move from the old `rclone-plasma` / `cosmic-rclone-ui` installs (`core::migrate::pending`). It is a code: `none` (nothing to do), `pending` (an old install is waiting; the daemon is moving it in the background), or the reason the last attempt failed: `ambiguous`, `conflict`, `sync-in-flight`, `mount-in-use`, `lock-timeout`, `failed`. While it is not `none`, offline folders can't be turned on or pinned. `migrationLabel` is the finished, translated text for it (empty when `none`); show it as a banner. The daemon starts the migration on a background thread after it owns its bus name, so activation never waits for it.
+- `migration` is the state of the one-time move from the old `rclone-plasma` / `cosmic-rclone-ui` installs (`core::migrate::pending`). It is a code: `none` (nothing to do), `pending` (an old install is waiting; the daemon is moving it in the background), or the reason the last attempt failed: `ambiguous`, `conflict`, `sync-in-flight`, `mount-in-use`, `lock-timeout`, `old-install-present`, `dev-build`, `failed`. While it is not `none`, offline folders can't be turned on or pinned. `migrationLabel` is the finished, translated text for it (empty when `none`); show it as a banner. The daemon starts the migration on a background thread after it owns its bus name, so activation never waits for it.
 
 ## Overlay emblems (`FileStates`)
 

@@ -37,8 +37,12 @@ public:
     /// Blocking property read with a short timeout, for callers that must answer synchronously
     /// (e.g. a context-menu plugin instantiated per menu). Empty on error/timeout.
     QString getPropertyBlocking(const QString &name, int timeoutMs);
-    /// The UI text for message `id`, from the daemon's Strings() (read once per process, with a
-    /// short blocking call). Falls back to the id itself when the daemon can't be reached.
+    /// Start fetching the daemon's Strings() asynchronously into the per-process cache, so the
+    /// first context menu usually finds it warm. Does nothing once cached or while in flight.
+    static void prefetchStrings();
+    /// The UI text for message `id`, from the daemon's Strings() (cached per process; if still
+    /// cold, one short blocking call, tried at most once per 10 s). Falls back to the id itself
+    /// when the daemon can't be reached.
     QString text(const QString &id);
     QString text(const char *id) { return text(QString::fromLatin1(id)); }
     /// If the mount path is unknown, fetch it with a blocking call. Returns mountPath().

@@ -7,6 +7,7 @@
 #include <QDBusPendingReply>
 #include <QDBusReply>
 #include <QDBusVariant>
+#include <QElapsedTimer>
 
 namespace
 {
@@ -18,6 +19,29 @@ constexpr int kStringsTimeoutMs = 300;
 // Dolphin builds a new plugin (and so a new DaemonClient) for every context menu, so the UI text
 // is cached for the whole process.
 DaemonClient::StringMap s_strings;
+// A blocking Strings() call is tried at most once per kBackoffMs per process, however many menus
+// (and DaemonClient instances) come and go while the daemon is away.
+QElapsedTimer s_stringsAttempt;
+bool s_stringsPrefetching = false;
+}
+
+void DaemonClient::prefetchStrings()
+{
+    if (!s_strings.isEmpty() || s_stringsPrefetching) {
+        return;
+    }
+    s_stringsPrefetching = true;
+    auto msg = QDBusMessage::createMethodCall(kService, kPath, kIface, QStringLiteral("Strings"));
+    // No parent: the call must outlive whichever client started it.
+    auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg));
+    QObject::connect(w, &QDBusPendingCallWatcher::finished, w, [w]() {
+        QDBusPendingReply<StringMap> reply = *w;
+        if (!reply.isError()) {
+            s_strings = reply.value();
+        }
+        s_stringsPrefetching = false;
+        w->deleteLater();
+    });
 }
 
 DaemonClient::DaemonClient(QObject *parent)
@@ -97,13 +121,13 @@ QString DaemonClient::getPropertyBlocking(const QString &name, int timeoutMs)
 
 QString DaemonClient::text(const QString &id)
 {
-    if (s_strings.isEmpty() && !backedOff()) {
+    const bool mayBlock = !s_stringsAttempt.isValid() || s_stringsAttempt.elapsed() >= kBackoffMs;
+    if (s_strings.isEmpty() && mayBlock) {
+        s_stringsAttempt.restart();
         auto msg = QDBusMessage::createMethodCall(kService, kPath, kIface, QStringLiteral("Strings"));
         const QDBusReply<StringMap> reply = QDBusConnection::sessionBus().call(msg, QDBus::Block, kStringsTimeoutMs);
         if (reply.isValid()) {
             s_strings = reply.value();
-        } else {
-            noteError();
         }
     }
     return s_strings.value(id, id);

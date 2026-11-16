@@ -120,6 +120,14 @@ impl SettingsState {
         self.consent = true;
     }
 
+    /// Take a config saved elsewhere (the file watch, another front end). While a setup runs or
+    /// its consent is open our copy is the truth and the update is ignored.
+    pub fn apply_config(&mut self, cfg: Config) {
+        if !self.busy && !self.consent {
+            self.cfg = cfg;
+        }
+    }
+
     /// The consent dialog was answered.
     pub fn answer_consent(&mut self, go: bool) -> ConsentAction {
         self.consent = false;
@@ -315,6 +323,27 @@ mod tests {
 
     fn state() -> SettingsState {
         SettingsState::new(Config::default())
+    }
+
+    #[test]
+    fn apply_config_is_ignored_while_busy_or_asking_consent() {
+        let on = Config {
+            offline_enabled: true,
+            ..Config::default()
+        };
+        let mut s = state();
+        s.apply_config(on.clone());
+        assert!(s.cfg.offline_enabled, "idle: applied");
+
+        let mut s = state();
+        s.consent = true;
+        s.apply_config(on.clone());
+        assert!(!s.cfg.offline_enabled, "consent open: ignored");
+
+        let mut s = state();
+        s.busy = true;
+        s.apply_config(on);
+        assert!(!s.cfg.offline_enabled, "busy: ignored");
     }
 
     #[test]

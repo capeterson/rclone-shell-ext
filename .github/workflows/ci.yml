@@ -138,16 +138,16 @@ jobs:
     timeout-minutes: 45
     steps:
       # cxx-qt: qt6-qtbase-devel (qmake6, Core/Gui) and qt6-qtdeclarative-devel (Qml, Quick
-      # Controls 2; also ships qmllint). Dolphin plugins: ECM, KIO, KCoreAddons, KI18n (optional
-      # in CMake, but installed so the translated build is the one tested), Qt DBus/Widgets from
-      # qtbase. gcc-c++ and cmake build the C++; git-core is for actions/checkout.
+      # Controls 2; also ships qmllint). Dolphin plugins: ECM, KIO, KCoreAddons, Qt DBus/Widgets
+      # from qtbase (their text comes from the daemon, so no KI18n).
+      # gcc-c++ and cmake build the C++; git-core is for actions/checkout.
       - name: System packages
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             git-core curl ca-certificates tar gzip which findutils just \
             gcc-c++ cmake extra-cmake-modules \
             qt6-qtbase-devel qt6-qtdeclarative-devel \
-            kf6-kio-devel kf6-kcoreaddons-devel kf6-ki18n-devel
+            kf6-kio-devel kf6-kcoreaddons-devel
       - uses: actions/checkout@v7
         with:
           persist-credentials: false

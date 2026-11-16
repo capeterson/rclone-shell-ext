@@ -234,10 +234,8 @@ impl qobject::SettingsModel {
             let alive = post(&qt, move |s| {
                 s.checks = checks;
                 s.state = state;
-                // While a setup runs, or its consent is open, our copy is the truth.
-                if !s.busy && !s.consent {
-                    s.cfg = cfg;
-                }
+                // Ignored while a setup runs or its consent is open: our copy is the truth.
+                s.apply_config(cfg);
             });
             if !alive {
                 return;

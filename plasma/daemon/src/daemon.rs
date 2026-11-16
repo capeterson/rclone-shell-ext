@@ -21,9 +21,7 @@ use zbus::blocking::{connection, Connection};
 use zbus::fdo::RequestNameFlags;
 use zbus::zvariant::Value;
 
-const NAME: &str = "com.ca-peterson.rclone-shell-ext";
-const PATH: &str = "/com/ca_peterson/rclone_shell_ext";
-const IFACE: &str = "com.ca_peterson.RcloneShellExt1";
+use rclone_ui_core::identity::{identity, DBUS_INTERFACE as IFACE, DBUS_PATH as PATH};
 const POLL: Duration = Duration::from_secs(2);
 const WORKER_BATCH: usize = 64;
 
@@ -112,11 +110,11 @@ impl Service {
     }
 
     fn service_action(&self, verb: &str) -> bool {
-        if !matches!(verb, "restart" | "stop" | "start") {
-            return false;
-        }
         let cfg = self.0.lock().cfg.clone();
-        rc::service_action(&cfg, verb)
+        let owned = verb.to_string();
+        start_service_action(verb, move || {
+            rc::service_action(&cfg, &owned);
+        })
     }
 
     fn open_folder(&self) {
@@ -183,6 +181,17 @@ impl Service {
 }
 
 /// Run this executable with `args`, reaping the child in the background.
+/// Accept `verb` and run `run` on its own thread: `systemctl` can take seconds, and a D-Bus
+/// method handler must never block on it. Returns whether the verb was accepted, not whether
+/// systemctl succeeded (the next status poll shows the outcome).
+fn start_service_action(verb: &str, run: impl FnOnce() + Send + 'static) -> bool {
+    if !matches!(verb, "restart" | "stop" | "start") {
+        return false;
+    }
+    std::thread::spawn(run);
+    true
+}
+
 fn spawn_self(args: &[&str]) {
     let Ok(exe) = std::env::current_exe() else {
         return;
@@ -405,6 +414,8 @@ fn worker(shared: &Arc<Shared>, rx: &Receiver<String>) {
 
 pub fn run() -> i32 {
     rclone_ui_i18n::init();
+    // The dev build owns a `-dev` name, so a dev and a release daemon don't clash.
+    let name = identity().dbus_name();
     let (tx, rx) = mpsc::channel();
     let cfg = store().load();
     let shared = Arc::new(Shared {
@@ -424,17 +435,17 @@ pub fn run() -> i32 {
         .and_then(|b| b.serve_at(PATH, Service(shared.clone())))
         .and_then(connection::Builder::build)
         .and_then(|c| {
-            c.request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into())
+            c.request_name_with_flags(name, RequestNameFlags::DoNotQueue.into())
                 .map(|_| c)
         });
     let conn = match built {
         Ok(c) => c,
         Err(zbus::Error::NameTaken) => {
-            eprintln!("{NAME} is already running");
+            eprintln!("{name} is already running");
             return 0;
         }
         Err(e) => {
-            eprintln!("cannot serve {NAME} on the session bus: {e}");
+            eprintln!("cannot serve {name} on the session bus: {e}");
             return 1;
         }
     };
@@ -448,5 +459,33 @@ pub fn run() -> i32 {
     std::thread::spawn(move || poller(&p));
     loop {
         std::thread::park();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_action_returns_before_the_command_finishes() {
+        let (release, wait) = mpsc::channel::<()>();
+        let (done_tx, done) = mpsc::channel::<()>();
+        // The "command" blocks until the test lets it go; the handler must not.
+        assert!(start_service_action("restart", move || {
+            let _ = wait.recv();
+            let _ = done_tx.send(());
+        }));
+        assert!(done.try_recv().is_err(), "still running in the background");
+        release.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn unknown_verbs_are_refused_without_running_anything() {
+        let (tx, rx) = mpsc::channel::<()>();
+        assert!(!start_service_action("disable", move || {
+            let _ = tx.send(());
+        }));
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
     }
 }

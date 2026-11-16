@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 const ID: &str = r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*";
 /// The one place this scan must not look: this file's own samples.
 const SELF_PATH: &str = "crates/i18n/tests/strings_sync.rs";
+/// The start of a QML text-ish property assignment.
+const QML_PROP: &str =
+    r"(?:^|[^A-Za-z0-9_.])(?:ToolTip\.)?(?:text|title|placeholderText|subtitle|label)";
 const SKIP_DIRS: [&str; 5] = ["target", ".git", "node_modules", "build", ".cache"];
 
 // ---- scanning helpers ----
@@ -104,15 +107,21 @@ fn literals(lang: Lang, path: &str, source: &str) -> Vec<Violation> {
             format!(r"\btext\(\s*{lit}"),
             format!(r"::text::[a-z0-9_]+\(\s*{lit}"),
             format!(r"\.title\(\s*{lit}"),
+            format!(r"\.description\(\s*{lit}"),
+            format!(r"\bbutton::(?:standard|suggested|destructive)\(\s*{lit}"),
+            format!(r"\bitem::builder\(\s*{lit}"),
+            // Window names Qt shows in the title bar and task switcher.
+            format!(r"set_application_display_name\(\s*&?QString::from\(\s*{lit}"),
         ],
         Lang::Qml => vec![
-            format!(
-                r"(?:^|[^A-Za-z0-9_.])(?:ToolTip\.)?(?:text|title|placeholderText|subtitle|label)\s*:\s*{lit}"
-            ),
+            format!(r"{QML_PROP}\s*:\s*{lit}"),
             // Plasma's own `i18n("…")` / `qsTr("…")` wrappers are still hard-coded wording.
             format!(r"\b(?:i18n[a-z]*|qsTr)\(\s*{lit}"),
+            // `text: busy ? "A" : "B"`: a literal right after the `?` or the `:` of a ternary.
+            format!(r"{QML_PROP}\s*:\s*[^\n]*?\?\s*{lit}"),
+            format!(r"{QML_PROP}\s*:\s*[^\n]*?\?[^\n]*?:\s*{lit}"),
         ],
-        Lang::Cpp => vec![format!(r"\bi18n\(\s*{lit}")],
+        Lang::Cpp => vec![format!(r"\bi18n\(\s*{lit}"), format!(r"\btr\(\s*{lit}")],
     };
     let code = blank_comment_lines(source);
     let lines: Vec<&str> = source.lines().collect();
@@ -142,13 +151,14 @@ fn literals(lang: Lang, path: &str, source: &str) -> Vec<Violation> {
     if lang == Lang::Cpp {
         // `QStringLiteral("…")` is everywhere (D-Bus names, icon names); it is a label only when
         // it feeds a widget text, which is what these calls take.
-        let icon =
-            Regex::new(r"QIcon::fromTheme\(\s*QStringLiteral\(\s*\x22[^\x22]*\x22\s*\)\s*\)")
-                .unwrap();
+        let icon = Regex::new(
+            r"QIcon::fromTheme\(\s*(?:QStringLiteral|QString::fromUtf8)\(\s*\x22[^\x22]*\x22\s*\)\s*\)",
+        )
+        .unwrap();
         let label_call =
             Regex::new(r"\b(?:setText|setToolTip|setWindowTitle|setTitle|addAction|QAction)\(")
                 .unwrap();
-        let sl = Regex::new(&format!(r"QStringLiteral\(\s*{lit}")).unwrap();
+        let sl = Regex::new(&format!(r"(?:QStringLiteral|QString::fromUtf8)\(\s*{lit}")).unwrap();
         let mut offset = 0;
         for line in code.split('\n') {
             let stripped = icon.replace_all(line, "");
@@ -387,6 +397,81 @@ fn iced_literals_are_flagged() {
     assert_eq!(hits(Lang::Rust, "w.title(\"Name\")"), 1);
     assert_eq!(hits(Lang::Rust, "widget::text::body(\"Some text\")"), 1);
     assert_eq!(hits(Lang::Rust, "text(\n    \"split\"\n)"), 1);
+}
+
+#[test]
+fn more_iced_and_qt_host_literals_are_flagged() {
+    assert_eq!(hits(Lang::Rust, "widget::button::standard(\"Cancel\")"), 1);
+    assert_eq!(hits(Lang::Rust, "button::suggested(\"Save\")"), 1);
+    assert_eq!(hits(Lang::Rust, "button::destructive(\"Delete\")"), 1);
+    assert_eq!(hits(Lang::Rust, "settings::item::builder(\"Folder\")"), 1);
+    assert_eq!(hits(Lang::Rust, "row.description(\"Some words\")"), 1);
+    assert_eq!(
+        hits(
+            Lang::Rust,
+            "app.set_application_display_name(&QString::from(\"rclone\"))"
+        ),
+        1
+    );
+    assert_eq!(
+        hits(
+            Lang::Rust,
+            "x.set_application_display_name(&QString::from(name))"
+        ),
+        0
+    );
+    assert_eq!(
+        hits(Lang::Rust, "button::standard(fl!(\"common-cancel\"))"),
+        0
+    );
+    assert_eq!(hits(Lang::Rust, "row.description(when)"), 0);
+}
+
+#[test]
+fn qml_ternary_literals_are_flagged() {
+    assert_eq!(hits(Lang::Qml, "  text: busy ? \"Working\" : \"Idle\""), 1);
+    assert_eq!(hits(Lang::Qml, "  text: busy ? s[\"a-b\"] : \"Idle\""), 1);
+    assert_eq!(hits(Lang::Qml, "  title: ok ? \"Done\" : s[\"a-b\"]"), 1);
+    assert_eq!(hits(Lang::Qml, "  text: busy ? s[\"a-b\"] : s[\"c-d\"]"), 0);
+    assert_eq!(
+        hits(Lang::Qml, "  text: busy ? Strings.t(\"a-b\") : \"\""),
+        0
+    );
+    assert_eq!(hits(Lang::Qml, "  text: busy ? \"…\" : \"\""), 0);
+    assert_eq!(
+        hits(
+            Lang::Qml,
+            "  text: busy ? \"Working\" : \"Idle\" // i18n-ignore: fixture"
+        ),
+        0
+    );
+    assert_eq!(hits(Lang::Qml, "  visible: busy ? \"yes\" : \"no\""), 0);
+}
+
+#[test]
+fn cpp_tr_and_from_utf8_labels_are_flagged() {
+    assert_eq!(hits(Lang::Cpp, "action->setText(tr(\"Open\"));"), 1);
+    assert_eq!(hits(Lang::Cpp, "auto s = QObject::tr(\"Open\");"), 1);
+    assert_eq!(
+        hits(Lang::Cpp, "action->setText(QString::fromUtf8(\"Open\"));"),
+        1
+    );
+    assert_eq!(
+        hits(Lang::Cpp, "menu->addAction(QString::fromUtf8(\"Open\"));"),
+        1
+    );
+    assert_eq!(
+        hits(
+            Lang::Cpp,
+            "menu->addAction(QIcon::fromTheme(QString::fromUtf8(\"folder\")), m_client->text(\"a-b\"));"
+        ),
+        0
+    );
+    assert_eq!(
+        hits(Lang::Cpp, "auto id = QString::fromUtf8(\"com.example\");"),
+        0
+    );
+    assert_eq!(hits(Lang::Cpp, "str(\"not tr\")"), 0);
 }
 
 #[test]

@@ -3,6 +3,7 @@
 
 use rclone_ui_core::config::Config;
 use rclone_ui_core::history::with_changes;
+use rclone_ui_core::identity::status_icon;
 use rclone_ui_core::mime_icon;
 use rclone_ui_core::pin::{OfflineState, Phase};
 use rclone_ui_core::rc::{self, ChangeKind, CompletedTransfer, Direction, Health, Status};
@@ -17,6 +18,8 @@ const FALLBACK_ICON: &str = "text-x-generic";
 #[serde(rename_all = "camelCase")]
 pub struct StatusJson {
     pub health: String,
+    /// The icon-theme name of the status icon for `health`; the plasmoid shows it as is.
+    pub health_icon: String,
     pub health_label: String,
     pub service_active: bool,
     pub mounted: bool,
@@ -123,6 +126,21 @@ pub fn health_name(h: Health) -> &'static str {
     }
 }
 
+/// The status icon (installed from `resources/emblems/`) for `h`.
+pub fn health_icon(h: Health) -> String {
+    status_icon(match h {
+        Health::ServiceStopped => "stopped",
+        Health::NotMounted => "unmounted",
+        Health::Unreachable => "unreachable",
+        Health::CacheFull => "full",
+        Health::FileErrors => "error",
+        Health::Uploading => "uploading",
+        Health::Downloading => "downloading",
+        Health::Transferring => "transferring",
+        Health::Healthy => "synced",
+    })
+}
+
 fn mime_icon_for(name: &str) -> String {
     mime_icon::icon_names(name)
         .into_iter()
@@ -140,7 +158,7 @@ fn offline_json(cfg: &Config, state: &OfflineState) -> OfflineJson {
                 let error = p.error.as_ref().map(rclone_ui_core::pin::PinError::label);
                 PinJson {
                     rel: rel.clone(),
-                    phase: format!("{:?}", p.phase),
+                    phase: p.phase.code().to_string(),
                     detail: match &error {
                         Some(e) => fl!(
                             "offline-describe-error",
@@ -156,7 +174,7 @@ fn offline_json(cfg: &Config, state: &OfflineState) -> OfflineJson {
             }
             None => PinJson {
                 rel: rel.clone(),
-                phase: format!("{:?}", Phase::Waiting),
+                phase: Phase::Waiting.code().to_string(),
                 phase_label: panel::pin_waiting(),
                 detail: panel::pin_waiting(),
                 phase_icon: Phase::Waiting.icon().to_string(),
@@ -180,8 +198,11 @@ pub fn build(
 ) -> StatusJson {
     let speed = st.display_speed();
     let now = jiff::Timestamp::now();
+    // A few `stat`s: once per snapshot, not once per field.
+    let migration = rclone_ui_core::migrate::pending();
     StatusJson {
         health: health_name(st.health()).to_string(),
+        health_icon: health_icon(st.health()),
         health_label: panel::health_label(st),
         service_active: st.service_active,
         mounted: st.mounted,
@@ -235,8 +256,8 @@ pub fn build(
             })
             .collect(),
         offline: offline_json(cfg, offline),
-        migration: rclone_ui_core::migrate::pending().code().into(),
-        migration_label: rclone_ui_core::migrate::pending().label(),
+        migration: migration.code().into(),
+        migration_label: migration.label(),
     }
 }
 
@@ -244,6 +265,7 @@ pub fn build(
 pub fn loading() -> StatusJson {
     StatusJson {
         health: "Loading".into(),
+        health_icon: status_icon("loading"),
         health_label: panel::headline(None),
         service_active: false,
         mounted: false,
@@ -393,6 +415,31 @@ mod tests {
             assert!(v.get(k).is_some(), "missing {k}");
         }
         assert_eq!(v["rcloneVersion"], json!("v1.75.2"));
+    }
+
+    #[test]
+    fn phase_codes_are_stable_and_match_the_enum_names() {
+        for (p, code) in [
+            (Phase::Downloading, "Downloading"),
+            (Phase::Ready, "Ready"),
+            (Phase::Waiting, "Waiting"),
+            (Phase::Attention, "Attention"),
+            (Phase::Removing, "Removing"),
+        ] {
+            assert_eq!(p.code(), code);
+            assert_eq!(p.code(), format!("{p:?}"));
+        }
+    }
+
+    #[test]
+    fn status_json_carries_the_icon_for_each_health() {
+        let st = status();
+        let doc = build(&st, &[], &OfflineState::default(), &Config::default());
+        assert_eq!(doc.health_icon, health_icon(st.health()));
+        assert!(doc.health_icon.starts_with("rclone-shell-ext-"));
+        assert_eq!(loading().health_icon, "rclone-shell-ext-loading");
+        assert_eq!(health_icon(Health::Healthy), "rclone-shell-ext-synced");
+        assert_eq!(health_icon(Health::CacheFull), "rclone-shell-ext-full");
     }
 
     #[test]

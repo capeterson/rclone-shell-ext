@@ -3,6 +3,7 @@
 
 ## common-: short words used in several places
 
+common-app-name = rclone UI
 common-yes = Yes
 common-no = No
 common-continue = Continue
@@ -61,7 +62,10 @@ details-row-version = Version
 
 details-sharing-unavailable = Unavailable
 details-sharing-not-shared = Not shared
-details-sharing-shared-with = Shared with { $count }
+details-sharing-shared-with = Shared with { $count ->
+    [one] 1 person
+   *[other] { $count } people
+}
 details-sharing-error = Couldn't load sharing info: { $error }
 details-sharing-only-you = Only you have access
 details-sharing-unlisted = Google Drive didn't list who has access
@@ -203,6 +207,7 @@ offline-err-no-network = no network
 offline-err-delete-local = Couldn't delete the local copy: { $error }
 offline-err-cloud-lookup = Couldn't look up the cloud folder: { $error }
 offline-heading = Offline folders
+offline-notify-attention = { $folder }: { $error }
 offline-notify-conflicts-resolved = Resolved { $count } conflicting edits in { $folder }
 
 ## health-: health headlines
@@ -347,7 +352,10 @@ cli-usage-plasma =
 cli-pin-keeping = Keeping { $folder } available offline
 cli-pin-stopped = No longer keeping { $folder } offline
 cli-repair-requested = Repair of { $folder } requested
-cli-offline-still-pinned = { $count } folder(s) are still kept offline; remove them in Settings first
+cli-offline-still-pinned = { $count ->
+    [one] 1 folder is
+   *[other] { $count } folders are
+} still kept offline; remove them in Settings first
 cli-offline-removed = Offline folder services removed
 cli-pins-header-on = offline folders: on
 cli-pins-header-off = offline folders: off

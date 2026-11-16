@@ -13,6 +13,9 @@ RcloneOverlayPlugin::RcloneOverlayPlugin(QObject *parent)
     : KOverlayIconPlugin(parent)
     , m_client(new DaemonClient(this))
 {
+    // The overlay plugin lives as long as Dolphin; the per-menu action plugin then finds the
+    // UI text already cached.
+    DaemonClient::prefetchStrings();
     m_flushTimer.setSingleShot(true);
     m_flushTimer.setInterval(kBatchDelayMs);
     connect(&m_flushTimer, &QTimer::timeout, this, &RcloneOverlayPlugin::flush);

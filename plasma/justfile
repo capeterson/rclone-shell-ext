@@ -101,16 +101,30 @@ reload-plasmashell:
     echo "Restart Dolphin to load the new plugins (start it with QT_PLUGIN_PATH set until your next login)."
 
 # Removes this version's files and the ones earlier versions (rclone-plasma) installed. The
-# offline-folder units go first; the shared binary stays while the COSMIC front end needs it.
+# offline-folder units, drop-in and `offline_enabled` are shared with the COSMIC front end, so
+# they and the shared binary only go when COSMIC is not installed. `--offline-remove` runs first:
+# if it refuses (folders are still kept offline) nothing has been touched yet.
 uninstall-user:
-    if [ -x {{prefix}}/bin/{{shared}} ]; then {{prefix}}/bin/{{shared}} --offline-remove; fi
-    if [ -x {{prefix}}/bin/{{oldname}} ]; then {{prefix}}/bin/{{oldname}} --offline-remove; fi
-    -pkill -x -f '{{prefix}}/bin/{{name}} --daemon'
-    -pkill -x -f '{{prefix}}/bin/{{oldname}} --daemon'
-    -kpackagetool6 -t Plasma/Applet -r com.ca-peterson.rclone-shell-ext
-    -kpackagetool6 -t Plasma/Applet -r {{oldplasmoid}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The pre-rename install: only if it was never migrated (a migration already removed its units,
+    # and its old config still lists pins, so its --offline-remove would refuse forever). Runs first:
+    # it is the step that can refuse, and nothing has been removed yet.
+    marker="${XDG_STATE_HOME:-$HOME/.local/state}/rclone-shell-ext/migrated-v1"
+    if [ ! -e "$marker" ] && [ -x {{prefix}}/bin/{{oldname}} ]; then
+        {{prefix}}/bin/{{oldname}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    cosmic_present=false
+    if [ -e {{prefix}}/bin/rclone-shell-ext-cosmic ]; then cosmic_present=true; fi
+    if [ "$cosmic_present" = false ] && [ -x {{prefix}}/bin/{{shared}} ]; then
+        {{prefix}}/bin/{{shared}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    pkill -x -f '{{prefix}}/bin/{{name}} --daemon' || true
+    pkill -x -f '{{prefix}}/bin/{{oldname}} --daemon' || true
+    kpackagetool6 -t Plasma/Applet -r {{appid}} || true
+    kpackagetool6 -t Plasma/Applet -r {{oldplasmoid}} || true
     rm -f {{prefix}}/bin/{{name}} {{prefix}}/share/dbus-1/services/{{appid}}.service {{prefix}}/share/applications/{{desktopid}}.desktop ~/.config/plasma-workspace/env/{{name}}.sh
-    if [ ! -e {{prefix}}/bin/rclone-shell-ext-cosmic ]; then rm -f {{prefix}}/bin/{{shared}}; fi
+    if [ "$cosmic_present" = false ]; then rm -f {{prefix}}/bin/{{shared}}; fi
     rm -f {{prefix}}/bin/{{oldname}} {{prefix}}/share/dbus-1/services/{{oldappid}}.service {{prefix}}/share/applications/{{oldappid}}.desktop ~/.config/plasma-workspace/env/{{oldname}}.sh
     rm -f {{plugindir}}/kf6/overlayicon/rcloneoverlayplugin.so {{plugindir}}/kf6/kfileitemaction/rclonefileitemaction.so
     find {{prefix}}/share/icons/hicolor \( -name 'rclone-shell-ext-*' -o -name '{{icon}}.svg' -o -name 'rclone-plasma*' \) -delete

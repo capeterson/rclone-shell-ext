@@ -18,6 +18,12 @@ impl History {
         &self.shown
     }
 
+    /// Show `latest` now, ending any wait (the debounce timer fired, or the popup just opened).
+    pub fn flush(&mut self, latest: &[CompletedTransfer]) {
+        self.shown = latest.to_vec();
+        self.pending_since = None;
+    }
+
     /// Feed the newest history; returns true if what is shown changed.
     pub fn update(&mut self, latest: &[CompletedTransfer], now: Instant) -> bool {
         if latest == self.shown {
@@ -76,6 +82,17 @@ mod tests {
         );
         assert!(h.update(&two, t0 + Duration::from_secs(3)));
         assert_eq!(h.shown().len(), 2);
+    }
+
+    #[test]
+    fn flush_shows_the_latest_and_clears_the_wait() {
+        let t0 = Instant::now();
+        let mut h = History::default();
+        h.update(&[item("a")], t0);
+        assert!(!h.update(&[item("b")], t0));
+        h.flush(&[item("b")]);
+        assert_eq!(h.shown()[0].name, "b");
+        assert!(!h.update(&[item("b")], t0), "nothing pending any more");
     }
 
     #[test]

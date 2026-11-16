@@ -103,7 +103,7 @@ impl cosmic::Application for App {
             }
             Message::ConfigTick => {
                 if let Some(c) = self.config_watch.poll() {
-                    self.st.cfg = c;
+                    self.st.apply_config(c);
                 }
             }
             Message::ToggleOffline(on) => {
@@ -128,11 +128,10 @@ impl cosmic::Application for App {
                 self.st.finish(r, Config::load());
                 return self.update(Message::Refresh);
             }
-            Message::Unpin(rel) => {
-                if let Err(e) = Config::save(|c| c.pins.retain(|p| *p != rel)) {
-                    self.st.error = Some(e);
-                }
-            }
+            Message::Unpin(rel) => match Config::save(|c| c.pins.retain(|p| *p != rel)) {
+                Ok(c) => self.st.apply_config(c),
+                Err(e) => self.st.error = Some(e),
+            },
             Message::Repair(rel) => {
                 if let Err(e) = keeper::request_repair(&rel) {
                     self.st.error = Some(e.to_string());
@@ -142,8 +141,14 @@ impl cosmic::Application for App {
                 share::open_url(&pin::mount_point(&self.st.cfg, &rel).to_string_lossy());
             }
             Message::ToggleContextMenu(on) => match Config::save(|c| c.context_menu = on) {
-                Ok(_) if on => crate::context_menu::install(),
-                Ok(_) => crate::context_menu::remove(),
+                Ok(c) => {
+                    self.st.apply_config(c);
+                    if on {
+                        crate::context_menu::install();
+                    } else {
+                        crate::context_menu::remove();
+                    }
+                }
                 Err(e) => self.st.error = Some(e),
             },
         }

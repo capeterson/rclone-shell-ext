@@ -38,13 +38,8 @@ PlasmoidItem {
     property string health: ""
     readonly property bool available: status !== null
 
-    readonly property var iconNames: ({
-        "ServiceStopped": "stopped", "NotMounted": "unmounted", "Unreachable": "unreachable",
-        "CacheFull": "full", "FileErrors": "error", "Uploading": "uploading",
-        "Downloading": "downloading", "Transferring": "transferring",
-        "Healthy": "synced", "Loading": "loading"
-    })
-    readonly property string iconName: "rclone-shell-ext-" + (available ? (iconNames[health] || "loading") : "loading")
+    // The daemon names the icon for the current health; until it answers, the applet's own icon.
+    readonly property string iconName: (available && status.healthIcon) ? status.healthIcon : Plasmoid.metaData.iconName
 
     function unwrap(v) {
         if (Array.isArray(v)) v = v[0];

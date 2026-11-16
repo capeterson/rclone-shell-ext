@@ -181,6 +181,18 @@ impl Phase {
         }
     }
 
+    /// The stable code for IPC payloads (the plasmoid reads it); never translated.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Phase::Downloading => "Downloading",
+            Phase::Ready => "Ready",
+            Phase::Waiting => "Waiting",
+            Phase::Attention => "Attention",
+            Phase::Removing => "Removing",
+        }
+    }
+
     pub fn icon(self) -> &'static str {
         match self {
             Phase::Downloading => "folder-download-symbolic",

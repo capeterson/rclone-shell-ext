@@ -12,8 +12,9 @@ use cosmic::prelude::*;
 use cosmic::widget;
 use rclone_ui_core::migrate::{self, MigrationStatus};
 use rclone_ui_i18n::fl;
+use rclone_ui_view::history::History;
 use rclone_ui_view::panel::{self, split_path};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const POLL_OPEN: Duration = Duration::from_secs(1);
 const POLL_CLOSED: Duration = Duration::from_secs(5);
@@ -42,8 +43,9 @@ pub struct AppModel {
     /// Avoid stacking requests when rclone is slow to answer.
     fetching: bool,
     page: Page,
-    /// The history the lists display. It trails `status.recent` by up to `HISTORY_DEBOUNCE`.
-    shown: Vec<CompletedTransfer>,
+    /// The history the lists display. It trails `status.recent` by up to `HISTORY_DEBOUNCE`
+    /// (the same debounce the Plasma daemon uses).
+    history: History,
     /// A `HistoryDebounced` message is already scheduled.
     history_pending: bool,
     /// What the offline-folder keeper last reported.
@@ -132,11 +134,9 @@ impl AppModel {
         let Some(st) = &self.status else {
             return Task::none();
         };
-        if st.recent == self.shown || self.history_pending {
-            return Task::none();
-        }
-        if self.shown.is_empty() {
-            self.shown.clone_from(&st.recent);
+        // The first fill is shown at once; `History` also starts the wait for later changes.
+        self.history.update(&st.recent, Instant::now());
+        if st.recent == self.history.shown() || self.history_pending {
             return Task::none();
         }
         self.history_pending = true;
@@ -361,19 +361,20 @@ impl AppModel {
             let mut header = widget::Row::new()
                 .align_y(Alignment::Center)
                 .push(widget::text::heading(fl!("panel-recent-heading")).width(Length::Fill));
-            if !self.shown.is_empty() {
+            if !self.history.shown().is_empty() {
                 header = header.push(
-                    widget::button::link(panel::show_all(self.shown.len()))
+                    widget::button::link(panel::show_all(self.history.shown().len()))
                         .on_press(Message::ShowHistory),
                 );
             }
             col = col.push(header);
-            if self.shown.is_empty() {
+            if self.history.shown().is_empty() {
                 col = col.push(widget::text::caption(panel::empty_history_text(st)));
             } else {
                 let now = jiff::Timestamp::now();
                 let rows = self
-                    .shown
+                    .history
+                    .shown()
                     .iter()
                     .take(RECENT_IN_POPUP)
                     .fold(widget::Column::new().width(Length::Fill), |c, t| {
@@ -404,7 +405,7 @@ impl AppModel {
             .padding(12)
             .width(Length::Fill)
             .push(header);
-        if self.shown.is_empty() {
+        if self.history.shown().is_empty() {
             let text = self
                 .status
                 .as_ref()
@@ -412,11 +413,12 @@ impl AppModel {
             col = col.push(widget::text::body(text));
         } else {
             col = col.push(widget::text::caption(panel::history_summary(
-                self.shown.len(),
+                self.history.shown().len(),
             )));
             let now = jiff::Timestamp::now();
             let rows = self
-                .shown
+                .history
+                .shown()
                 .iter()
                 .fold(widget::Column::new().width(Length::Fill), |c, t| {
                     c.push(recent_row(t, now, true))
@@ -506,7 +508,7 @@ impl cosmic::Application for AppModel {
             Message::HistoryDebounced => {
                 self.history_pending = false;
                 if let Some(st) = &self.status {
-                    self.shown.clone_from(&st.recent);
+                    self.history.flush(&st.recent);
                 }
             }
             Message::ShowHistory => self.page = Page::History,
@@ -545,7 +547,7 @@ impl cosmic::Application for AppModel {
                     // Open on the main page with the freshest history.
                     self.page = Page::Main;
                     if let Some(st) = &self.status {
-                        self.shown.clone_from(&st.recent);
+                        self.history.flush(&st.recent);
                     }
                     let mut settings = self.core.applet.get_popup_settings(
                         self.core.main_window_id().unwrap(),
@@ -677,39 +679,39 @@ mod tests {
         let mut s = status();
         s.recent = vec![done("a", 1, None)];
         let _ = app.update(Message::StatusUpdated(s));
-        assert_eq!(app.shown.len(), 1);
+        assert_eq!(app.history.shown().len(), 1);
         assert!(!app.history_pending);
     }
 
     #[test]
     fn later_history_changes_wait_for_the_debounce() {
-        let mut app = AppModel {
-            shown: vec![done("a", 1, None)],
-            ..Default::default()
-        };
+        let mut app = AppModel::default();
+        app.history.flush(&[done("a", 1, None)]);
         let mut s = status();
         s.recent = vec![done("b", 1, None), done("a", 1, None)];
         let _ = app.update(Message::StatusUpdated(s.clone()));
-        assert_eq!(app.shown.len(), 1, "not yet");
+        assert_eq!(app.history.shown().len(), 1, "not yet");
         assert!(app.history_pending);
 
         // Further updates while waiting neither show anything nor schedule a second timer.
         s.recent.insert(0, done("c", 1, None));
         let _ = app.update(Message::StatusUpdated(s));
-        assert_eq!(app.shown.len(), 1);
+        assert_eq!(app.history.shown().len(), 1);
         assert!(app.history_pending);
 
         let _ = app.update(Message::HistoryDebounced);
         assert!(!app.history_pending);
-        assert_eq!(app.shown.len(), 3, "catches up to the newest status");
+        assert_eq!(
+            app.history.shown().len(),
+            3,
+            "catches up to the newest status"
+        );
     }
 
     #[test]
     fn unchanged_history_schedules_nothing() {
-        let mut app = AppModel {
-            shown: vec![done("a", 1, None)],
-            ..Default::default()
-        };
+        let mut app = AppModel::default();
+        app.history.flush(&[done("a", 1, None)]);
         let mut s = status();
         s.recent = vec![done("a", 1, None)];
         let _ = app.update(Message::StatusUpdated(s));

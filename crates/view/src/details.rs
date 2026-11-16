@@ -119,6 +119,50 @@ pub struct DetailsView {
     pub offline_error: String,
 }
 
+/// Which value a detail row holds. Consumers look values up by key, never by the translated
+/// label or by position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowKey {
+    /// A file's modification time on Drive.
+    DriveModified,
+    /// Whether a file is in the local cache.
+    CachedLocally,
+    /// A file's size.
+    Size,
+    /// A file's Drive version.
+    Version,
+    /// A folder's files being uploaded.
+    Uploading,
+    /// A folder's files being downloaded.
+    Downloading,
+    /// A folder's cache, or its offline copy inside an offline folder (the label says which).
+    Cached,
+}
+
+/// One row under the status line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailRow {
+    /// What the value is.
+    pub key: RowKey,
+    /// The finished, translated label.
+    pub label: String,
+    /// The finished value.
+    pub value: String,
+}
+
+impl DetailRow {
+    fn new(key: RowKey, label: String, value: String) -> Self {
+        Self { key, label, value }
+    }
+}
+
+/// The value of the row with `key`, or an empty string when there is none.
+pub fn row_value(rows: &[DetailRow], key: RowKey) -> String {
+    rows.iter()
+        .find(|r| r.key == key)
+        .map_or_else(String::new, |r| r.value.clone())
+}
+
 #[derive(Debug, Clone)]
 pub struct DetailsState {
     pub cfg: Config,
@@ -313,9 +357,10 @@ impl DetailsState {
         Some(fl!("details-files-size", count = n, size = human_bytes(b)))
     }
 
-    /// The label/value pairs under the status line, with placeholders while loading: four for a
-    /// file, three for a folder.
-    pub fn detail_rows(&self) -> Vec<(String, String)> {
+    /// The rows under the status line, with placeholders while loading: four for a file, three
+    /// for a folder. Each carries its [`RowKey`], so consumers never match on translated labels
+    /// or on position.
+    pub fn detail_rows(&self) -> Vec<DetailRow> {
         let from_drive = |f: &dyn Fn(&DriveInfo) -> Option<String>| match &self.drive {
             Load::Pending => PLACEHOLDER.to_string(),
             Load::Done(Ok(d)) => f(d).unwrap_or_else(|| NONE.into()),
@@ -328,18 +373,23 @@ impl DetailsState {
                 _ => NONE.to_string(),
             };
             return vec![
-                (
+                DetailRow::new(
+                    RowKey::Uploading,
                     fl!("details-row-uploading"),
                     from_local(&|s| s.uploading.to_string()),
                 ),
-                (
+                DetailRow::new(
+                    RowKey::Downloading,
                     fl!("details-row-downloading"),
                     from_local(&|s| s.downloading.to_string()),
                 ),
                 // An offline folder's files live in its local copy, not in the mount's cache.
                 match self.offline_copy() {
-                    Some(copy) => (fl!("details-row-offline-copy"), copy),
-                    None => (
+                    Some(copy) => {
+                        DetailRow::new(RowKey::Cached, fl!("details-row-offline-copy"), copy)
+                    }
+                    None => DetailRow::new(
+                        RowKey::Cached,
                         fl!("details-row-cached"),
                         from_local(&|s| {
                             if s.truncated {
@@ -385,13 +435,19 @@ impl DetailsState {
             _ => NONE.to_string(),
         };
         vec![
-            (
+            DetailRow::new(
+                RowKey::DriveModified,
                 fl!("details-row-drive-modified"),
                 from_drive(&|d| d.modified.map(status::fmt_time)),
             ),
-            (fl!("details-row-cached-locally"), cached),
-            (fl!("details-row-size"), size),
-            (
+            DetailRow::new(
+                RowKey::CachedLocally,
+                fl!("details-row-cached-locally"),
+                cached,
+            ),
+            DetailRow::new(RowKey::Size, fl!("details-row-size"), size),
+            DetailRow::new(
+                RowKey::Version,
                 fl!("details-row-version"),
                 from_drive(&|d| d.version.clone()),
             ),
@@ -539,22 +595,18 @@ impl DetailsState {
     pub fn view(&self) -> DetailsView {
         let (sync_icon, sync_label, sync_detail) = self.status_line();
         let rows = self.detail_rows();
-        let row = |label: &str| {
-            rows.iter()
-                .find(|(l, _)| l == label)
-                .map_or_else(String::new, |(_, v)| v.clone())
-        };
+        let row = |key: RowKey| row_value(&rows, key);
         let buttons = self.buttons();
         let offline = self.offline_row();
         let (note_icon, note) = self
             .sharing_note()
             .map_or((String::new(), String::new()), |(i, t)| (i.to_string(), t));
         let (cached_label, cached) = if self.is_dir {
-            let label = rows
-                .get(2)
-                .map_or_else(|| fl!("details-row-cached"), |r| r.0.clone());
-            let value = row(&label);
-            (label, value)
+            // The folder's cache row is labelled "Offline copy" inside an offline folder.
+            rows.iter().find(|r| r.key == RowKey::Cached).map_or_else(
+                || (fl!("details-row-cached"), String::new()),
+                |r| (r.label.clone(), r.value.clone()),
+            )
         } else {
             (fl!("details-row-cached"), String::new())
         };
@@ -567,12 +619,12 @@ impl DetailsState {
             sync_label,
             sync_icon: sync_icon.to_string(),
             sync_detail,
-            drive_modified: row(&fl!("details-row-drive-modified")),
-            cache_state: row(&fl!("details-row-cached-locally")),
-            size: row(&fl!("details-row-size")),
-            version: row(&fl!("details-row-version")),
-            uploading: row(&fl!("details-row-uploading")),
-            downloading: row(&fl!("details-row-downloading")),
+            drive_modified: row(RowKey::DriveModified),
+            cache_state: row(RowKey::CachedLocally),
+            size: row(RowKey::Size),
+            version: row(RowKey::Version),
+            uploading: row(RowKey::Uploading),
+            downloading: row(RowKey::Downloading),
             cached,
             cached_label,
             shared: matches!(&self.drive, Load::Done(Ok(d)) if d.shared),
@@ -935,13 +987,18 @@ mod tests {
         let mut s = in_offline_folder(Phase::Ready, false);
         s.offline_usage = Some((362, 563 * 1024 * 1024));
         let rows = s.detail_rows();
-        assert_eq!(rows[2].0, "Offline copy");
-        assert!(rows[2].1.starts_with("362 file(s), 563"), "{}", rows[2].1);
+        assert_eq!(rows[2].label, "Offline copy");
+        assert_eq!(rows[2].key, RowKey::Cached);
+        assert!(
+            rows[2].value.starts_with("362 file(s), 563"),
+            "{}",
+            rows[2].value
+        );
         let view = s.view();
         assert_eq!(view.cached_label, "Offline copy");
         assert!(view.cached.starts_with("362 file(s)"));
         s.path = "/m/d/sub".into();
-        assert_eq!(s.detail_rows()[2].0, "Cached");
+        assert_eq!(s.detail_rows()[2].label, "Cached");
     }
 
     #[test]
@@ -980,15 +1037,24 @@ mod tests {
 
     // ---- detail rows ----
 
-    fn labels(rows: &[(String, String)]) -> Vec<&str> {
-        rows.iter().map(|(l, _)| l.as_str()).collect()
+    fn labels(rows: &[DetailRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.label.as_str()).collect()
     }
 
-    fn value<'a>(rows: &'a [(String, String)], label: &str) -> &'a str {
+    fn value<'a>(rows: &'a [DetailRow], label: &str) -> &'a str {
         rows.iter()
-            .find(|(l, _)| l == label)
-            .map(|(_, v)| v.as_str())
+            .find(|r| r.label == label)
+            .map(|r| r.value.as_str())
             .unwrap()
+    }
+
+    #[test]
+    fn values_are_found_by_key_even_when_labels_collide() {
+        let row = |key, v: &str| DetailRow::new(key, "Same".into(), v.into());
+        let rows = [row(RowKey::Size, "1"), row(RowKey::Version, "2")];
+        assert_eq!(row_value(&rows, RowKey::Version), "2");
+        assert_eq!(row_value(&rows, RowKey::Size), "1");
+        assert_eq!(row_value(&rows, RowKey::Uploading), "");
     }
 
     #[test]
@@ -1004,12 +1070,12 @@ mod tests {
     #[test]
     fn rows_show_placeholders_while_pending_and_dashes_on_failure() {
         let rows = state(false).detail_rows();
-        assert!(rows.iter().all(|(_, v)| v == PLACEHOLDER));
+        assert!(rows.iter().all(|r| r.value == PLACEHOLDER));
         let mut s = state(false);
         s.local = Load::Done(Err("x".into()));
         s.drive = Load::Done(Err("x".into()));
         let rows = s.detail_rows();
-        assert!(rows.iter().all(|(_, v)| v == NONE), "{rows:?}");
+        assert!(rows.iter().all(|r| r.value == NONE), "{rows:?}");
     }
 
     #[test]
@@ -1088,9 +1154,15 @@ mod tests {
             ],
             ..DriveInfo::default()
         }));
-        assert_eq!(s.sharing_summary(), "Shared with 2");
+        assert_eq!(s.sharing_summary(), "Shared with 2 people");
         assert!(s.sharing_note().is_none());
         assert_eq!(s.permissions().len(), 3);
+        s.drive = Load::Done(Ok(DriveInfo {
+            shared: true,
+            permissions: vec![perm("me", Role::Owner), perm("amy", Role::Editor)],
+            ..DriveInfo::default()
+        }));
+        assert_eq!(s.sharing_summary(), "Shared with 1 person");
     }
 
     #[test]

@@ -338,7 +338,8 @@ impl Menu {
                     .height(Length::Fixed(32.0))
                     .align_y(Alignment::Center),
             );
-        for (label, value) in self.state.detail_rows() {
+        for row in self.state.detail_rows() {
+            let (label, value) = (row.label, row.value);
             col = col.push(
                 widget::container(
                     widget::row::with_capacity(2)

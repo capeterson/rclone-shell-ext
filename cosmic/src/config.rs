@@ -35,22 +35,28 @@ impl ConfigExt for Config {
 }
 
 /// Notices when `config.toml` changes (its modification time moves) so a window can reload.
-/// The first poll only records the file's time.
-#[derive(Debug, Default)]
+/// Create it when the window loads its config, so a change between that load and the first
+/// poll is not missed.
+#[derive(Debug)]
 pub struct ConfigWatch {
-    state: Option<(TomlStore, Option<SystemTime>)>,
+    file: TomlStore,
+    seen: Option<SystemTime>,
+}
+
+impl Default for ConfigWatch {
+    /// Records the file's time now.
+    fn default() -> Self {
+        let file = TomlStore::new(TomlStore::default_path());
+        let seen = file.mtime();
+        Self { file, seen }
+    }
 }
 
 impl ConfigWatch {
     /// The settings if the file changed since the last poll.
     pub fn poll(&mut self) -> Option<Config> {
-        let (file, seen) = self.state.get_or_insert_with(|| {
-            let file = TomlStore::new(TomlStore::default_path());
-            let seen = file.mtime();
-            (file, seen)
-        });
-        let now = file.changed_since(*seen)?;
-        *seen = now;
+        let now = self.file.changed_since(self.seen)?;
+        self.seen = now;
         Some(store().load())
     }
 }

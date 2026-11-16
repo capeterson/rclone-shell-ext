@@ -7,6 +7,7 @@
 mod bridge;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQuickStyle, QString, QUrl};
+use rclone_ui_i18n::fl;
 
 /// The QML module URI (see `build.rs`).
 const MODULE_URI: &str = "com.ca_peterson.RcloneShellExt";
@@ -15,12 +16,14 @@ const APP_ID: &str = rclone_ui_core::identity::PLASMA_DESKTOP_ID;
 /// `rclone-shell-ext-plasma --menu PATH...`: the details window for a mounted file or folder.
 pub fn run_details(paths: &[String]) -> i32 {
     bridge::details::set_initial_paths(paths);
-    run_qml("Details.qml", "rclone")
+    rclone_ui_i18n::init();
+    run_qml("Details.qml", &fl!("details-window-title"))
 }
 
 /// `rclone-shell-ext-plasma --settings`: the settings window (offline folders setup, integrations).
 pub fn run_settings() -> i32 {
-    run_qml("Settings.qml", "rclone settings")
+    rclone_ui_i18n::init();
+    run_qml("Settings.qml", &fl!("settings-window-title"))
 }
 
 /// Create the application and engine, load one window from the QML module, and run the event
@@ -43,7 +46,7 @@ fn run_qml(file: &str, display_name: &str) -> i32 {
         return 1;
     };
     app.as_mut()
-        .set_organization_name(&QString::from("ca-peterson"));
+        .set_organization_name(&QString::from(rclone_ui_core::identity::ORGANIZATION));
     app.as_mut()
         .set_application_name(&QString::from(rclone_ui_core::identity::identity().slug));
     app.as_mut()

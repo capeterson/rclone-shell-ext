@@ -543,7 +543,7 @@ pub fn request_repair(rel: &str) -> std::io::Result<()> {
 fn desktop_notify(text: &str) {
     let _ = Command::new("notify-send")
         .args([
-            "--app-name=rclone UI",
+            &format!("--app-name={}", fl!("common-app-name")),
             "--icon=folder-sync-symbolic",
             &fl!("offline-heading"),
             text,
@@ -783,7 +783,11 @@ impl Keeper {
                 let p = self.pin(rel);
                 p.phase = Phase::Attention;
                 p.error = Some(why.clone());
-                desktop_notify(&format!("{rel}: {}", why.label()));
+                desktop_notify(&fl!(
+                    "offline-notify-attention",
+                    folder = rel,
+                    error = why.label()
+                ));
             }
             Failure::Retry(_) | Failure::NeedsResync => {
                 let p = self.pin(rel);
@@ -1066,6 +1070,16 @@ pub fn set_pinned(path: &str, pinned: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attention_notification_is_one_message() {
+        rclone_ui_i18n::init();
+        assert_eq!(
+            fl!("offline-notify-attention", folder = "Docs", error = "Gone"),
+            "Docs: Gone"
+        );
+        assert_eq!(fl!("common-app-name"), "rclone UI");
+    }
 
     fn classify_text(s: &str) -> Failure {
         classify(&PinError::Other(s.to_string()))

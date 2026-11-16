@@ -21,6 +21,12 @@ pub const DEV_SLUG: &str = "rclone-shell-ext-dev";
 /// the release and dev builds, so this does not follow the dev identity.
 pub const ICON_PREFIX: &str = "rclone-shell-ext";
 
+/// The name of the status icon for `state` (`synced`, `uploading`, ...).
+#[must_use]
+pub fn status_icon(state: &str) -> String {
+    format!("{ICON_PREFIX}-{state}")
+}
+
 /// The name of the Dolphin emblem for `state` (`synced`, `offline`, ...).
 #[must_use]
 pub fn emblem_icon(state: &str) -> String {
@@ -33,6 +39,17 @@ pub const COSMIC_DESKTOP_ID: &str = "com.ca-peterson.rclone-shell-ext.Cosmic";
 pub const DEV_COSMIC_DESKTOP_ID: &str = "com.ca-peterson.rclone-shell-ext-dev.Cosmic";
 /// The Plasma front end's desktop id (the settings launcher).
 pub const PLASMA_DESKTOP_ID: &str = "com.ca-peterson.rclone-shell-ext.Plasma";
+
+/// The Plasma daemon's D-Bus name for a normal install (the same as [`APP_ID`]).
+pub const DBUS_NAME: &str = APP_ID;
+/// The dev build's D-Bus name, so a dev and a release daemon never fight over one name.
+pub const DEV_DBUS_NAME: &str = DEV_APP_ID;
+/// The Plasma daemon's object path (D-Bus paths cannot contain `-`).
+pub const DBUS_PATH: &str = "/com/ca_peterson/rclone_shell_ext";
+/// The Plasma daemon's interface (interface names cannot contain `-`).
+pub const DBUS_INTERFACE: &str = "com.ca_peterson.RcloneShellExt1";
+/// The organisation name Qt applications set (settings and cache directories).
+pub const ORGANIZATION: &str = "ca-peterson";
 
 /// The names one process works under.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +86,17 @@ impl Identity {
             None => Identity::RELEASE,
             Some(DEV_APP_ID) => Identity::DEV,
             Some(other) => panic!("APP_ID_OVERRIDE must be {DEV_APP_ID}, not {other}"),
+        }
+    }
+
+    /// The D-Bus name the Plasma daemon owns: [`DBUS_NAME`], or [`DEV_DBUS_NAME`] for the dev
+    /// build.
+    #[must_use]
+    pub fn dbus_name(&self) -> &'static str {
+        if self.is_dev() {
+            DEV_DBUS_NAME
+        } else {
+            DBUS_NAME
         }
     }
 
@@ -148,6 +176,13 @@ mod tests {
         assert_eq!(Identity::from_override(None), Identity::RELEASE);
         assert_eq!(Identity::from_override(Some(DEV_APP_ID)), Identity::DEV);
         assert!(Identity::DEV.is_dev() && !Identity::RELEASE.is_dev());
+    }
+
+    #[test]
+    fn dev_and_release_daemons_own_different_bus_names() {
+        assert_eq!(Identity::RELEASE.dbus_name(), DBUS_NAME);
+        assert_eq!(Identity::DEV.dbus_name(), DEV_DBUS_NAME);
+        assert_ne!(DBUS_NAME, DEV_DBUS_NAME);
     }
 
     #[test]
