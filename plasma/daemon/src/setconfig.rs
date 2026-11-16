@@ -2,10 +2,19 @@
 //! `GetConfig` / `SetConfig` JSON handling.
 
 use rclone_ui_core::config::{store, Config};
+use rclone_ui_i18n::fl;
 use serde_json::Value;
 
-pub fn get_json(cfg: &Config) -> String {
-    serde_json::to_string(cfg).unwrap_or_else(|_| "{}".into())
+/// The `GetConfig` reply: the config as JSON, or `{"errorText": "..."}` with a finished,
+/// translated message when the file exists but can't be read.
+pub fn get_json(cfg: Result<Config, String>) -> String {
+    match cfg {
+        Ok(cfg) => serde_json::to_string(&cfg).unwrap_or_else(|_| "{}".into()),
+        Err(e) => serde_json::json!({
+            "errorText": fl!("plasma-config-read-failed", error = e.as_str())
+        })
+        .to_string(),
+    }
 }
 
 /// `cfg` with the fields of the JSON object `json` replaced. Unknown fields and wrongly typed
@@ -55,6 +64,15 @@ pub fn set(json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn get_json_reports_a_read_failure_as_finished_text() {
+        let ok: Value = serde_json::from_str(&get_json(Ok(Config::default()))).unwrap();
+        assert!(ok.get("errorText").is_none() && ok.get("rc_addr").is_some());
+        let bad: Value = serde_json::from_str(&get_json(Err("bad toml".into()))).unwrap();
+        let text = bad["errorText"].as_str().unwrap();
+        assert!(text.contains("bad toml"), "{text}");
+    }
 
     #[test]
     fn merges_known_fields() {

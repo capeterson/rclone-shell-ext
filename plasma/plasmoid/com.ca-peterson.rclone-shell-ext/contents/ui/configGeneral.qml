@@ -14,25 +14,36 @@ KCM.SimpleKCM {
 
     readonly property var fields: ["rc_addr", "env_file", "service", "mount_path", "cache_dir", "sync_interval_secs"]
     property var original: ({})
-    property string loadError: ""
+    // The daemon's own finished explanation of a failed read (may be empty), and whether the
+    // read failed at all; the fallback wording "daemon not running" needs Strings().
+    property string loadDetail: ""
+    property bool loadFailed: false
+    readonly property string loadError: loadFailed
+        ? (loadDetail !== "" ? loadDetail : s["panel-service-missing"]) : ""
     property string saveError: ""
     property bool loaded: false
 
     // The daemon's UI text (id -> wording). A config page can open before the daemon runs; the
-    // Strings() call starts it. Until it answers an id shows as itself.
-    property var s: withFallback({})
+    // Strings() call starts it. Until it answers (stringsLoaded) there is no wording, so the
+    // page shows a busy indicator; a timer retries if the daemon wasn't ready.
+    property var s: withDefault({})
+    property bool stringsLoaded: false
 
-    function withFallback(table) {
+    // Unknown ids read as "" so a binding never assigns undefined to a text property.
+    function withDefault(table) {
         return new Proxy(table, {
             get: function (target, id) {
-                return target[id] !== undefined ? target[id] : String(id);
+                return target[id] !== undefined ? target[id] : "";
             }
         });
     }
 
     function loadStrings() {
         bus("Strings", [], function (table) {
-            if (table !== null && typeof table === "object") page.s = withFallback(table);
+            if (table !== null && typeof table === "object") {
+                page.s = withDefault(table);
+                page.stringsLoaded = true;
+            }
         });
     }
 
@@ -55,6 +66,12 @@ KCM.SimpleKCM {
         bus("GetConfig", [], function (json) {
             try {
                 const cfg = JSON.parse(json);
+                if (cfg.errorText !== undefined) {
+                    // The daemon couldn't read the file and says why, already translated.
+                    page.loadDetail = String(cfg.errorText);
+                    page.loadFailed = true;
+                    return;
+                }
                 page.original = cfg;
                 rcAddr.text = cfg.rc_addr !== undefined ? String(cfg.rc_addr) : "";
                 envFile.text = cfg.env_file !== undefined && cfg.env_file !== null ? String(cfg.env_file) : "";
@@ -63,12 +80,16 @@ KCM.SimpleKCM {
                 cacheDir.text = cfg.cache_dir !== undefined ? String(cfg.cache_dir) : "";
                 interval.value = cfg.sync_interval_secs !== undefined ? Number(cfg.sync_interval_secs) : 0;
                 page.loaded = true;
-                page.loadError = "";
+                page.loadFailed = false;
+                page.loadDetail = "";
             } catch (e) {
-                page.loadError = page.s["plasma-config-read-failed"];
+                console.warn("rclone UI: bad GetConfig reply:", e);
+                page.loadDetail = "";
+                page.loadFailed = true;
             }
         }, function (err) {
-            page.loadError = page.s["panel-service-missing"];
+            page.loadDetail = "";
+            page.loadFailed = true;
         });
     }
 
@@ -103,7 +124,22 @@ KCM.SimpleKCM {
         load();
     }
 
+    // Retry reading the wording until the daemon answers (it may still be starting).
+    Timer {
+        interval: 2000
+        running: !page.stringsLoaded
+        repeat: true
+        onTriggered: page.loadStrings()
+    }
+
+    QQC2.BusyIndicator {
+        anchors.centerIn: parent
+        visible: !page.stringsLoaded
+        running: visible
+    }
+
     Kirigami.FormLayout {
+        visible: page.stringsLoaded
         Kirigami.InlineMessage {
             Kirigami.FormData.isSection: false
             Layout.fillWidth: true

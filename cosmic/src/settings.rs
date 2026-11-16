@@ -72,7 +72,7 @@ impl cosmic::Application for App {
 
     fn init(mut core: cosmic::Core, cfg: Config) -> (Self, Task) {
         core.window.show_maximize = false;
-        core.set_header_title(fl!("cosmic-settings-window-title"));
+        core.set_header_title(fl!("settings-window-title"));
         let app = App {
             core,
             st: SettingsState::new(cfg),
@@ -169,16 +169,16 @@ impl cosmic::Application for App {
         );
         Some(
             widget::dialog()
-                .title(fl!("cosmic-settings-consent-title"))
+                .title(fl!("settings-consent-title"))
                 .icon(widget::icon::from_name("folder-download-symbolic").size(64))
-                .body(fl!("cosmic-settings-consent-body"))
+                .body(fl!("settings-consent-intro"))
                 .control(widget::container(widget::scrollable(list)).max_height(360.0))
                 .primary_action(
                     widget::button::suggested(self.st.consent_go_label())
                         .on_press(Message::Consent(true)),
                 )
                 .secondary_action(
-                    widget::button::standard(fl!("cosmic-settings-cancel"))
+                    widget::button::standard(fl!("common-cancel"))
                         .on_press(Message::Consent(false)),
                 )
                 .into(),
@@ -194,7 +194,7 @@ impl cosmic::Application for App {
         }
         sections.push(
             settings::section()
-                .title(fl!("cosmic-settings-section-general"))
+                .title(fl!("settings-heading-general"))
                 .add(
                     // The one COSMIC-only control: COSMIC Files has an extension point of its own.
                     settings::item::builder(fl!("cosmic-settings-context-menu"))
@@ -235,12 +235,9 @@ impl App {
     ) -> settings::Section<'a, Message> {
         for (title, desc, done) in rclone_ui_core::offline_setup::setup_steps(self.st.checks) {
             let (icon, status) = if done {
-                ("emblem-ok-symbolic", fl!("cosmic-settings-step-done"))
+                ("emblem-ok-symbolic", fl!("settings-step-done"))
             } else {
-                (
-                    "dialog-information-symbolic",
-                    fl!("cosmic-settings-step-todo"),
-                )
+                ("dialog-information-symbolic", fl!("settings-step-todo"))
             };
             sec = sec.add(
                 settings::item::builder(title)
@@ -253,30 +250,28 @@ impl App {
         // of it (say the drop-in was deleted). Both go through the consent dialog.
         let hint = self.st.setup_hint();
         sec.add(if self.st.busy {
-            settings::item::builder(fl!("cosmic-settings-setting-up"))
+            settings::item::builder(fl!("settings-setting-up"))
                 .description(hint)
                 .control(widget::Space::new())
         } else {
-            settings::item::builder(fl!("cosmic-settings-setup-incomplete"))
+            settings::item::builder(fl!("settings-setup-incomplete"))
                 .description(hint)
                 .control(
-                    widget::button::suggested(fl!("cosmic-settings-setup-button"))
+                    widget::button::suggested(fl!("settings-setup-button"))
                         .on_press(Message::SetUp),
                 )
         })
     }
 
     fn offline_section(&self, now: i64) -> Element<'_, Message> {
-        let mut sec = settings::section()
-            .title(fl!("cosmic-settings-section-offline"))
-            .add(
-                settings::item::builder(fl!("cosmic-settings-offline-toggle"))
-                    .description(self.st.description())
-                    .toggler_maybe(
-                        self.st.toggle_checked(),
-                        self.st.toggle_allowed().then_some(Message::ToggleOffline),
-                    ),
-            );
+        let mut sec = settings::section().title(fl!("offline-heading")).add(
+            settings::item::builder(fl!("settings-keep-offline-switch"))
+                .description(self.st.description())
+                .toggler_maybe(
+                    self.st.toggle_checked(),
+                    self.st.toggle_allowed().then_some(Message::ToggleOffline),
+                ),
+        );
         if !self.st.cfg.offline_enabled {
             return sec.into();
         }
@@ -285,7 +280,7 @@ impl App {
         }
         if self.st.cfg.pins.is_empty() {
             sec = sec.add(
-                settings::item::builder(fl!("cosmic-settings-no-pins"))
+                settings::item::builder(fl!("settings-no-pins"))
                     .description(fl!("cosmic-settings-no-pins-hint"))
                     .control(widget::Space::new()),
             );
@@ -310,17 +305,17 @@ impl App {
             let mut buttons = widget::row::with_capacity(3).spacing(8);
             if row.can_repair {
                 buttons = buttons.push(
-                    widget::button::standard(fl!("cosmic-settings-repair"))
+                    widget::button::standard(fl!("common-repair"))
                         .on_press(Message::Repair(row.rel.clone())),
                 );
             }
             buttons = buttons
                 .push(
-                    widget::button::standard(fl!("cosmic-settings-open"))
+                    widget::button::standard(fl!("common-open"))
                         .on_press(Message::Open(row.rel.clone())),
                 )
                 .push(
-                    widget::button::destructive(fl!("cosmic-settings-remove"))
+                    widget::button::destructive(fl!("common-remove"))
                         .on_press(Message::Unpin(row.rel.clone())),
                 );
             sec = sec.add(
@@ -334,7 +329,7 @@ impl App {
     }
 
     fn notices_section(notices: Vec<(String, String)>) -> Element<'static, Message> {
-        let mut sec = settings::section().title(fl!("cosmic-settings-section-activity"));
+        let mut sec = settings::section().title(fl!("settings-heading-activity"));
         for (text, when) in notices {
             sec = sec.add(
                 settings::item::builder(text)

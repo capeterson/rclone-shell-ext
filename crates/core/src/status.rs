@@ -48,9 +48,9 @@ pub enum SyncState {
 impl SyncState {
     pub fn label(self) -> String {
         match self {
-            SyncState::Uploading => fl!("details-state-uploading"),
+            SyncState::Uploading => fl!("common-uploading"),
             SyncState::QueuedUpload => fl!("details-state-queued-upload"),
-            SyncState::Downloading => fl!("details-state-downloading"),
+            SyncState::Downloading => fl!("common-downloading"),
             SyncState::InSync => fl!("details-state-in-sync"),
             SyncState::OnlineOnly => fl!("details-state-online-only"),
             SyncState::PartlyCached => fl!("details-state-partly-cached"),

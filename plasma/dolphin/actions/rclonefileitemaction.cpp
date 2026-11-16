@@ -104,7 +104,7 @@ QList<QAction *> RcloneFileItemAction::actions(const KFileItemListProperties &fi
                 });
             }
             if (!pinsKnown || pinned) {
-                QAction *unpin = menu->addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), m_client->text("dolphin-stop-keeping-offline"));
+                QAction *unpin = menu->addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), m_client->text("details-stop-keeping-offline"));
                 connect(unpin, &QAction::triggered, this, [path]() {
                     launch({QStringLiteral("--unpin"), path});
                 });

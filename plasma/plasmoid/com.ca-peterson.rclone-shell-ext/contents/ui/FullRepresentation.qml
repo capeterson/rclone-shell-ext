@@ -14,6 +14,8 @@ PlasmaExtras.Representation {
     property var host: null
     // The daemon's UI text (main.qml's `s`).
     property var s: ({})
+    // False until Strings() has answered: the wording isn't there yet, so show a busy indicator.
+    property bool stringsLoaded: false
 
     readonly property var st: host ? host.status : null
     readonly property bool available: st !== null
@@ -62,18 +64,24 @@ PlasmaExtras.Representation {
     }
 
     contentItem: Item {
+        PlasmaComponents3.BusyIndicator {
+            anchors.centerIn: parent
+            visible: !full.stringsLoaded
+            running: visible
+        }
+
         // Daemon missing.
         PlasmaExtras.PlaceholderMessage {
             anchors.centerIn: parent
             width: parent.width - Kirigami.Units.gridUnit * 4
-            visible: !full.available
+            visible: full.stringsLoaded && !full.available
             iconName: "rclone-shell-ext-loading"
             text: full.s["panel-service-missing"]
         }
 
         PlasmaComponents3.ScrollView {
             anchors.fill: parent
-            visible: full.available
+            visible: full.stringsLoaded && full.available
             contentWidth: availableWidth
 
             ColumnLayout {
@@ -85,6 +93,8 @@ PlasmaExtras.Representation {
                     model: {
                         const w = [];
                         if (!full.available) return w;
+                        if (full.st.migration && full.st.migration !== "none")
+                            w.push({ type: Kirigami.MessageType.Information, text: String(full.st.migrationLabel) });
                         if (full.st.outdatedRclone)
                             w.push({ type: Kirigami.MessageType.Warning, text: String(full.st.outdatedText) });
                         if (full.st.rcError)
@@ -150,7 +160,7 @@ PlasmaExtras.Representation {
                     level: 5
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.topMargin: Kirigami.Units.smallSpacing
-                    text: full.s["panel-offline-heading"]
+                    text: full.s["offline-heading"]
                 }
                 PlasmaComponents3.Label {
                     visible: full.offlineEnabled

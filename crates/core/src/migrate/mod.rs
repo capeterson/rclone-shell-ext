@@ -152,9 +152,10 @@ impl From<String> for MigrationFailure {
 }
 
 /// Whether a migration is waiting, without touching anything. See [`pending`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MigrationStatus {
     /// Nothing to do (marker present, no old install, dev build).
+    #[default]
     NotNeeded,
     /// An old install is waiting to be moved.
     Pending,
@@ -1229,6 +1230,7 @@ fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
 
 fn skip() -> bool {
     cfg!(test)
+        || crate::identity::is_test_run()
         || std::env::var_os(SKIP_ENV).is_some()
         || crate::identity::try_identity().is_none_or(crate::identity::Identity::is_dev)
 }
@@ -1264,14 +1266,6 @@ fn guard_status(status: MigrationStatus) -> Result<(), MigrationFailure> {
             fl!("migrate-error-old-install-present"),
         )),
     }
-}
-
-/// [`crate::keeper::set_pinned`] behind [`guard`] (pinning only; unpinning is always allowed).
-pub fn set_pinned_guarded(path: &str, pinned: bool) -> Result<String, String> {
-    if pinned {
-        guard().map_err(|e| e.message)?;
-    }
-    crate::keeper::set_pinned(path, pinned)
 }
 
 /// Run `f` with an [`Env`] built from this process: the real XDG directories and the real

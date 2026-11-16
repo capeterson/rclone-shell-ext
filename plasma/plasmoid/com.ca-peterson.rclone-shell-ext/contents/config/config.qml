@@ -30,7 +30,7 @@ ConfigModel {
     }
 
     ConfigCategory {
-        name: model.s["plasma-config-general"]
+        name: model.s["settings-heading-general"]
         icon: "configure"
         source: "configGeneral.qml"
     }

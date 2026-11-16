@@ -120,7 +120,7 @@ impl cosmic::Application for Menu {
     fn init(mut core: cosmic::Core, flags: Flags) -> (Self, Task) {
         core.window.show_maximize = false;
         core.window.show_minimize = false;
-        core.set_header_title(fl!("cosmic-details-title"));
+        core.set_header_title(fl!("details-window-title"));
         let menu = Menu {
             core,
             state: DetailsState::new(flags.cfg.clone(), &flags.paths),
@@ -278,7 +278,7 @@ impl Menu {
             .spacing(cosmic::theme::spacing().space_s)
             .align_x(Alignment::Center)
             .push(spinner)
-            .push(widget::text::body(fl!("cosmic-details-loading")));
+            .push(widget::text::body(fl!("details-checking-sync-status")));
         widget::container(col)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -329,7 +329,7 @@ impl Menu {
             );
         let mut col = widget::column::with_capacity(6)
             .push(
-                widget::container(widget::text::heading(fl!("cosmic-details-sync-heading")))
+                widget::container(widget::text::heading(fl!("details-heading-sync-status")))
                     .height(Length::Fixed(20.0))
                     .align_y(Alignment::Center),
             )
@@ -374,10 +374,7 @@ impl Menu {
         let title = widget::container(
             widget::row::with_capacity(2)
                 .align_y(Alignment::Center)
-                .push(
-                    widget::text::heading(fl!("cosmic-details-sharing-heading"))
-                        .width(Length::Fill),
-                )
+                .push(widget::text::heading(fl!("details-heading-sharing")).width(Length::Fill))
                 .push(widget::text::caption(self.state.sharing_summary())),
         )
         .height(Length::Fixed(24.0))
@@ -387,9 +384,9 @@ impl Menu {
             .push(title)
             .push(
                 widget::container(perm_columns(
-                    widget::text::caption_heading(fl!("cosmic-details-col-name")).into(),
-                    widget::text::caption_heading(fl!("cosmic-details-col-role")).into(),
-                    widget::text::caption_heading(fl!("cosmic-details-col-type")).into(),
+                    widget::text::caption_heading(fl!("details-column-name")).into(),
+                    widget::text::caption_heading(fl!("details-column-role")).into(),
+                    widget::text::caption_heading(fl!("details-column-type")).into(),
                 ))
                 .height(Length::Fixed(20.0)),
             )
@@ -459,24 +456,24 @@ impl Menu {
         // "Open" expands in place into "Folder" / "File", so it keeps the same slot and the row
         // never changes size. A folder has nothing to choose between, so it opens directly.
         let open: Element<'_, Message> = match buttons.open {
-            OpenButton::Direct => widget::button::standard(fl!("cosmic-details-open"))
+            OpenButton::Direct => widget::button::standard(fl!("common-open"))
                 .on_press(Message::OpenPath(path.clone()))
                 .width(Length::Fill)
                 .into(),
             OpenButton::Menu if self.open_expanded => widget::row::with_capacity(2)
                 .spacing(cosmic::theme::spacing().space_xxs)
                 .push(
-                    widget::button::standard(fl!("cosmic-details-open-folder"))
+                    widget::button::standard(fl!("details-open-folder"))
                         .on_press(Message::OpenPath(parent_dir(path)))
                         .width(Length::Fill),
                 )
                 .push(
-                    widget::button::standard(fl!("cosmic-details-open-file"))
+                    widget::button::standard(fl!("details-open-file"))
                         .on_press(Message::OpenPath(path.clone()))
                         .width(Length::Fill),
                 )
                 .into(),
-            OpenButton::Menu => widget::button::standard(fl!("cosmic-details-open"))
+            OpenButton::Menu => widget::button::standard(fl!("common-open"))
                 .on_press(Message::ToggleOpen)
                 .width(Length::Fill)
                 .into(),

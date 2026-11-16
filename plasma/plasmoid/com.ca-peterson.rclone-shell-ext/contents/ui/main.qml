@@ -10,15 +10,16 @@ PlasmoidItem {
     readonly property string busPath: "/com/ca_peterson/rclone_shell_ext"
     readonly property string busIface: "com.ca_peterson.RcloneShellExt1"
 
-    // The daemon's UI text (id -> wording), from Strings(). Until it has been read, an id shows
-    // as itself so nothing is blank.
-    property var s: withFallback({})
+    // The daemon's UI text (id -> wording), from Strings(). Until it has been read (see
+    // stringsLoaded) every id is empty, and the popup shows a busy indicator instead.
+    property var s: withDefault({})
     property bool stringsLoaded: false
 
-    function withFallback(table) {
+    // Unknown ids read as "" so a binding never assigns undefined to a text property.
+    function withDefault(table) {
         return new Proxy(table, {
             get: function (target, id) {
-                return target[id] !== undefined ? target[id] : String(id);
+                return target[id] !== undefined ? target[id] : "";
             }
         });
     }
@@ -26,7 +27,7 @@ PlasmoidItem {
     function loadStrings() {
         call("Strings", [], function (table) {
             if (table !== null && typeof table === "object") {
-                s = withFallback(table);
+                s = withDefault(table);
                 stringsLoaded = true;
             }
         });
@@ -120,5 +121,6 @@ PlasmoidItem {
     fullRepresentation: FullRepresentation {
         host: root
         s: root.s
+        stringsLoaded: root.stringsLoaded
     }
 }

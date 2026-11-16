@@ -131,10 +131,7 @@ fn read_listing(file: &Path) -> Option<HashMap<String, String>> {
 
 /// The listing file for one side of `local`'s session (`suffix` is e.g. `.path1.lst-new`).
 fn listing_file(workdir: &Path, local: &Path, suffix: &str) -> Option<PathBuf> {
-    let flat = local
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace('/', "_");
+    let flat = crate::bisync_name::flatten(local);
     std::fs::read_dir(workdir).ok()?.flatten().find_map(|e| {
         let n = e.file_name().to_string_lossy().into_owned();
         (n.contains(&flat) && n.ends_with(suffix)).then(|| e.path())
@@ -322,19 +319,7 @@ fn bisync(cfg: &Config, remote: &str, local: &Path, resync: bool) -> Result<(), 
 /// mount's rclone, so any running job is a sync it started. Unknown counts as none: if rclone
 /// can't be asked, the sync itself fails anyway.
 fn running_jobs(cfg: &Config) -> usize {
-    let Ok(list) = rc::rc_request(cfg, "job/list", &json!({})) else {
-        return 0;
-    };
-    list.get("jobids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_i64)
-        .filter(|id| {
-            rc::rc_request(cfg, "job/status", &json!({ "jobid": id }))
-                .is_ok_and(|s| s.get("finished").and_then(Value::as_bool) == Some(false))
-        })
-        .count()
+    rc::unfinished_jobs(cfg).unwrap_or(0)
 }
 
 /// bisync's "all files were changed" safety abort.
@@ -560,7 +545,7 @@ fn desktop_notify(text: &str) {
         .args([
             "--app-name=rclone UI",
             "--icon=folder-sync-symbolic",
-            &fl!("offline-notify-title"),
+            &fl!("offline-heading"),
             text,
         ])
         .spawn();
@@ -1047,7 +1032,16 @@ pub fn pin_unmount(id: &str) {
 }
 
 /// `--pin PATH` / `--unpin PATH` from the command line or the menu. Returns the relative path.
+///
+/// Pinning is refused while an old install waits to be migrated (unpinning always works): the
+/// migration itself never calls this, so the guard can't block it.
+///
+/// # Errors
+/// A finished, translated message.
 pub fn set_pinned(path: &str, pinned: bool) -> Result<String, String> {
+    if pinned {
+        crate::migrate::guard().map_err(|e| e.message)?;
+    }
     let cfg = crate::config::store().load();
     if !cfg.offline_enabled {
         return Err(fl!("offline-err-turned-off"));

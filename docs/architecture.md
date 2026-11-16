@@ -50,13 +50,18 @@ spells them itself. A dev build is made with `APP_ID_OVERRIDE=com.ca-peterson.rc
 and its units run the `rclone-shell-ext-dev` binary: the units always `ExecStart` the sibling of
 the running executable named after the slug (else `PATH`), see `core::units::shared_exe`.
 
-Config is one TOML file both shells read and write (atomic replace). Front ends that need live
-updates watch the file (mtime poll is fine; the Plasma daemon already polls every 2 s).
-COSMIC-only or Plasma-only settings are still fields of the one `Config` struct.
+Config is one TOML file both shells read and write. `TomlStore` takes an exclusive `flock` on a
+sidecar `config.toml.lock` around every save (so the two shells and the CLI can't lose each
+other's edits), writes atomically (temp file, fsync, rename), and **refuses to overwrite a file
+it can't parse**: `load_checked()` reports the corrupt file (the Plasma `GetConfig` turns that
+into a finished `errorText`), `load()` falls back to defaults for display only, and `save()`
+fails instead of replacing the user's file with defaults. Front ends that need live updates
+watch the file (mtime poll is fine; the Plasma daemon already polls every 2 s). COSMIC-only or
+Plasma-only settings are still fields of the one `Config` struct.
 
 ### Migration from the old identities
 
-`core::migrate` runs once, from every binary's start-up (`migrate::run_if_needed()`), guarded by
+`core::migrate` moves an old install over once. The marker is
 `$XDG_STATE_HOME/rclone-shell-ext/migrated-v1`. Old identities:
 
 | Old | slug | config |
@@ -64,25 +69,51 @@ COSMIC-only or Plasma-only settings are still fields of the one `Config` struct.
 | COSMIC applet | `cosmic-rclone-ui` | cosmic-config `~/.config/cosmic/com.ca-peterson.CosmicRcloneUi/v1/<field>` (one RON value per file) |
 | Plasma | `rclone-plasma` | KConfig INI `~/.config/rclone-plasmarc`, group `[General]` |
 
-Rules: pick the old install that has `offline_enabled` / units installed (if both do, take the
-one whose keeper unit is enabled, and report the other); never delete user data; stop the old
-keeper and pin units before moving anything; move `data/` and `state/` dirs with `rename`
-(same filesystem) and **rename the bisync listing files whose names embed the old data path**
-so the sync baseline survives (no `--resync`); rewrite units + drop-in under the new names,
-`daemon-reload`, re-enable/start what was enabled; best-effort rewrite of the COSMIC panel
-applet entry (`com.ca-peterson.CosmicRcloneUi` → the new desktop id). Any unexpected state:
-abort before the first mutation, leave the old install untouched, and report through
-`rclone-shell-ext --migrate --dry-run`. Everything takes injected roots (XDG dirs, a
-`systemctl` runner) and is tested against temp dirs; it is never exercised against `$HOME`
-in tests or by agents.
+Rules: pick the old install that has `offline_enabled` / units installed (if both have offline
+folders and both keepers are enabled it is ambiguous and the migration aborts); never delete user
+data; stop the old keeper and pin units before moving anything; **wait until quiet** (rclone has
+no unfinished rc jobs and no FUSE mount sits on the old data or inside the Drive mount, up to a
+timeout, then fail with `sync-in-flight` / `mount-in-use` and put the old keeper back); move
+`data/` and `state/` dirs with `rename` (same filesystem) and **rename the bisync listing files
+whose names embed the old data path** (through `bisync_name::flatten`, the same function the
+keeper uses to find them) so the sync baseline survives (no `--resync`); rewrite units + drop-in
+under the new names, `daemon-reload`, re-enable the new keeper (and start it if the Drive mount
+runs); best-effort rewrite of the COSMIC panel applet entry. Any unexpected state: abort before
+the first mutation, leave the old install untouched, and report. The old config files
+(`rclone-plasmarc`, the cosmic-config directory) are left in place.
 
-Implementation notes: `rclone-shell-ext-cli`'s `startup(args)` (called by every binary) runs
-`run_if_needed`, except in the unit modes (the migration stops those very units) and for
-`--migrate` itself; `RCLONE_SHELL_EXT_NO_MIGRATE` switches it off for tests that run binaries, and
-a lock file keeps two binaries starting together from both migrating. The old config files
-(`rclone-plasmarc`, the cosmic-config directory) are left in place. If both old installs have
-offline folders and both keepers are enabled, it is ambiguous and the migration aborts. Steps are
-idempotent, so an interrupted run resumes when run again.
+**Journal.** Before the first step the plan is written to
+`$XDG_STATE_HOME/rclone-shell-ext-migrate-journal.json`; steps are idempotent, so an interrupted
+run resumes from the journal when run again (and the journal, not a fresh scan, then decides which
+old install is being moved). A failed attempt leaves a `<slug>-migrate-error` code file next to it
+for `pending()`.
+
+**When it runs.**
+- *At install, in the foreground:* `just cosmic::install-user` / `just plasma::install-user`
+  run `rclone-shell-ext --migrate`; a failure stops the recipe with the reason and leaves the old
+  files (and the old plasmoid/daemon) working. Only after success are the old install's own files
+  removed.
+- *CLI modes:* `rclone-shell-ext-cli`'s `startup(args)` (called by every binary) runs
+  `migrate::run_if_needed()` before the command-line modes that may use offline folders, except
+  in the unit modes (the migration stops those very units) and for `--migrate` itself.
+- *Windowed front ends, in the background:* the Plasma daemon (after it owns its bus name, so
+  D-Bus activation never waits) and the COSMIC applet call `migrate::spawn_background()`; both
+  return immediately.
+- A lock file keeps two processes starting together from both migrating (the second waits up to
+  a minute, then reports `lock-timeout`). `RCLONE_SHELL_EXT_NO_MIGRATE` switches migration off for
+  tests that run binaries; the dev build never migrates; a test run (a test identity was used,
+  or core's own `cfg(test)`) behaves as if nothing was pending.
+
+**`pending()` and `guard()`.** `migrate::pending()` is a few `stat`s and changes nothing: it
+returns `NotNeeded`, `Pending` or `Failed(reason)`, and `.label()` is the finished text. The COSMIC
+popup shows a banner row with the label while it is not `NotNeeded` (refreshed with each status
+poll); the Plasma daemon puts `migration` (code) and `migrationLabel` (text) in `StatusJson` and the
+plasmoid shows a banner. `migrate::guard()` refuses with `OldInstallPresent` while something is
+pending; `keeper::set_pinned` (when pinning), `offline_setup::set_up` and `turn_on` all call it, so
+the new keeper and the old one never fight over the same folders. The migration itself never calls
+any of them. Everything in the migration takes injected roots (XDG dirs, a `systemctl` runner, rc
+and mount probes) and is tested against temp dirs; it is never exercised against `$HOME` in tests
+or by agents.
 
 ## UI text (string externalization)
 
@@ -99,6 +130,7 @@ today; the layout is ready for more. Message ids are kebab-case and prefixed by 
 | `details-` | the details window |
 | `settings-` | the settings window |
 | `offline-` | offline folders: phases, consent, setup steps, keeper errors |
+| `migrate-` | the migration: plan, errors, banner labels |
 | `share-`, `drive-` | sharing and Drive metadata |
 | `cli-` | CLI output |
 | `common-` | short words used in several places (`common-open`, `common-cancel`) |
@@ -120,9 +152,19 @@ calls the same loader. QML writes `Strings.t("details-open-folder")`.
 
 **Plasmoid and Dolphin plugins** (not our process): the daemon exports
 `Strings() -> a{ss}`: every argument-free message, resolved for the current locale. The plasmoid
-loads it once into `property var s` and writes `s["panel-open-folder"]`; the C++ plugins use
-`DaemonClient::text("dolphin-details")`. Anything with arguments arrives preformatted in
-`StatusJson` or another D-Bus reply.
+(and its config page) loads it into `property var s` and writes `s["panel-open-folder"]`; until
+`Strings()` has answered, `s` is empty (every id reads as `""`, never as the raw id) and the popup
+and config page show a busy indicator instead of text, retrying until the daemon answers. The C++
+plugins use `DaemonClient::text("dolphin-details")`. Anything with arguments arrives preformatted
+in `StatusJson` or another D-Bus reply; a config read failure arrives as `GetConfig`'s
+`{"errorText": ...}`.
+
+**One message per meaning.** The COSMIC and Kirigami windows share ids for the same control
+(`details-heading-sync-status`, `settings-keep-offline-switch`, `common-open`, ...); a
+`cosmic-`/`plasma-`/`dolphin-` id exists only where the control exists in one shell only (the Files
+context-menu toggle, the Dolphin section, the plasmoid config page, shell-specific hints). The
+temporary per-branch "zone" blocks used while the windows were written are gone; the `.ftl` has
+one section per prefix.
 
 **Enforcement** (`crates/i18n/tests/strings_sync.rs`, runs in the `core` CI job, no Qt needed):
 1. Every id referenced anywhere exists in `en` (Rust is compile-checked; the test scans QML for

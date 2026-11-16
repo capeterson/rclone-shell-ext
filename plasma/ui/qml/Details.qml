@@ -143,8 +143,8 @@ Kirigami.ApplicationWindow {
 
                 Repeater {
                     model: details.isDir
-                        ? [[Strings.t("details-row-uploading"), details.uploading],
-                           [Strings.t("details-row-downloading"), details.downloading],
+                        ? [[Strings.t("common-uploading"), details.uploading],
+                           [Strings.t("common-downloading"), details.downloading],
                            [details.cachedLabel, details.cached]]
                         : [[Strings.t("details-row-drive-modified"), details.driveModified],
                            [Strings.t("details-row-cached-locally"), details.cacheState],
@@ -337,7 +337,7 @@ Kirigami.ApplicationWindow {
 
                 QQC2.Button {
                     id: openButton
-                    text: Strings.t("details-open")
+                    text: Strings.t("common-open")
                     icon.name: "document-open"
                     onClicked: details.openIsMenu ? openMenu.popup(openButton, 0, -openMenu.height) : details.openFolder()
 
