@@ -10,6 +10,7 @@ use cosmic::iced::platform_specific::shell::wayland::commands::popup::{destroy_p
 use cosmic::iced::{time, window::Id, Alignment, Length, Limits, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget;
+use rclone_ui_core::migrate::{self, MigrationStatus};
 use rclone_ui_i18n::fl;
 use rclone_ui_view::panel::{self, split_path};
 use std::time::Duration;
@@ -47,6 +48,8 @@ pub struct AppModel {
     history_pending: bool,
     /// What the offline-folder keeper last reported.
     offline: OfflineState,
+    /// Whether an old install still waits to be moved over; refreshed with every status poll.
+    migration: MigrationStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +102,8 @@ fn action_buttons(running: bool) -> Element<'static, Message> {
 
 impl AppModel {
     fn refresh(&mut self) -> Task<cosmic::Action<Message>> {
+        // A few `stat`s, so it is fine on the UI thread.
+        self.migration = migrate::pending();
         if self.fetching {
             return Task::none();
         }
@@ -183,6 +188,20 @@ fn outdated_alert(version: &str) -> Element<'static, Message> {
         .into()
 }
 
+/// A one-line notice with an info icon, wrapped to the popup width.
+fn info_banner(text: String) -> Element<'static, Message> {
+    widget::Row::new()
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .push(widget::icon::from_name("dialog-information-symbolic").size(20))
+        .push(
+            widget::text::body(text)
+                .width(Length::Fill)
+                .wrapping(cosmic::iced::widget::text::Wrapping::Word),
+        )
+        .into()
+}
+
 /// The active transfers: a caption and a full-width progress bar each, up to 8.
 fn transfer_rows(st: &Status) -> Element<'_, Message> {
     let mut col = widget::Column::new().spacing(8).width(Length::Fill);
@@ -197,15 +216,6 @@ fn transfer_rows(st: &Status) -> Element<'_, Message> {
         )));
     }
     col.into()
-}
-
-/// "just now", "5 minutes ago", "3 hours ago", "2 days ago". Empty when the time is unknown.
-// The settings window may stop using this once it moves to `view::ago` directly.
-#[allow(dead_code)]
-pub(crate) fn ago(now: jiff::Timestamp, then: Option<jiff::Timestamp>) -> String {
-    then.map_or_else(String::new, |t| {
-        rclone_ui_view::ago(now.as_second(), t.as_second())
-    })
 }
 
 fn with_tip(icon: Element<'_, Message>, tip: String) -> Element<'_, Message> {
@@ -327,6 +337,10 @@ impl AppModel {
             col = col.push(header);
         } else {
             col = col.push(title);
+        }
+
+        if self.migration != MigrationStatus::NotNeeded {
+            col = col.push(info_banner(self.migration.label()));
         }
 
         if let Some(v) = self.status.as_ref().and_then(Status::outdated_rclone) {
@@ -655,21 +669,6 @@ mod tests {
             times: 1,
             kind: None,
         }
-    }
-
-    #[test]
-    fn ago_covers_every_boundary() {
-        let now = ts("2026-11-02T12:00:00Z");
-        let at = |secs: i64| Some(now - jiff::SignedDuration::from_secs(secs));
-        assert_eq!(ago(now, None), "");
-        assert_eq!(ago(now, at(0)), "just now");
-        assert_eq!(ago(now, at(59)), "just now");
-        assert_eq!(ago(now, at(60)), "1 minute ago");
-        assert_eq!(ago(now, at(3599)), "59 minutes ago");
-        assert_eq!(ago(now, at(3600)), "1 hour ago");
-        assert_eq!(ago(now, at(86399)), "23 hours ago");
-        assert_eq!(ago(now, at(86400)), "1 day ago");
-        assert_eq!(ago(now, at(-30)), "just now", "clock skew");
     }
 
     #[test]

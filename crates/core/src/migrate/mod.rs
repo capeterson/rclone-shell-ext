@@ -152,9 +152,10 @@ impl From<String> for MigrationFailure {
 }
 
 /// Whether a migration is waiting, without touching anything. See [`pending`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MigrationStatus {
     /// Nothing to do (marker present, no old install, dev build).
+    #[default]
     NotNeeded,
     /// An old install is waiting to be moved.
     Pending,
