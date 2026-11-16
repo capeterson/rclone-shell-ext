@@ -237,10 +237,7 @@ impl App {
             let (icon, status) = if done {
                 ("emblem-ok-symbolic", fl!("settings-step-done"))
             } else {
-                (
-                    "dialog-information-symbolic",
-                    fl!("settings-step-todo"),
-                )
+                ("dialog-information-symbolic", fl!("settings-step-todo"))
             };
             sec = sec.add(
                 settings::item::builder(title)
@@ -267,16 +264,14 @@ impl App {
     }
 
     fn offline_section(&self, now: i64) -> Element<'_, Message> {
-        let mut sec = settings::section()
-            .title(fl!("offline-heading"))
-            .add(
-                settings::item::builder(fl!("settings-keep-offline-switch"))
-                    .description(self.st.description())
-                    .toggler_maybe(
-                        self.st.toggle_checked(),
-                        self.st.toggle_allowed().then_some(Message::ToggleOffline),
-                    ),
-            );
+        let mut sec = settings::section().title(fl!("offline-heading")).add(
+            settings::item::builder(fl!("settings-keep-offline-switch"))
+                .description(self.st.description())
+                .toggler_maybe(
+                    self.st.toggle_checked(),
+                    self.st.toggle_allowed().then_some(Message::ToggleOffline),
+                ),
+        );
         if !self.st.cfg.offline_enabled {
             return sec.into();
         }

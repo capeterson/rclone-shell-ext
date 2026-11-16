@@ -374,10 +374,7 @@ impl Menu {
         let title = widget::container(
             widget::row::with_capacity(2)
                 .align_y(Alignment::Center)
-                .push(
-                    widget::text::heading(fl!("details-heading-sharing"))
-                        .width(Length::Fill),
-                )
+                .push(widget::text::heading(fl!("details-heading-sharing")).width(Length::Fill))
                 .push(widget::text::caption(self.state.sharing_summary())),
         )
         .height(Length::Fixed(24.0))

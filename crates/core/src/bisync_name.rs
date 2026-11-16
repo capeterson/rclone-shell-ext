@@ -7,9 +7,6 @@
 //! not be confirmed from its source while writing this, so the keeper's listing lookup and the
 //! migration's renames must both go through [`flatten`]: then they can never disagree, and a
 //! change in rclone's rule is one edit here.
-//!
-//! TODO(integrator): `keeper::listing_file` still has its own copy of this expression; switch
-//! it to [`flatten`].
 
 use std::path::Path;
 

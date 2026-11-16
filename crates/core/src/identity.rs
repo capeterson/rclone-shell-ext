@@ -5,6 +5,7 @@
 //! There is no default: a binary must call [`set_identity`] before anything asks for the
 //! identity, so a forgotten call fails loudly instead of quietly using someone else's names.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 /// The shared application id, the same for every front end.
@@ -89,7 +90,10 @@ fn require(slot: &OnceLock<Identity>) -> &Identity {
 /// the release identity instead).
 pub fn identity() -> &'static Identity {
     #[cfg(any(test, feature = "test-identity"))]
-    IDENTITY.get_or_init(|| Identity::RELEASE);
+    IDENTITY.get_or_init(|| {
+        mark_test();
+        Identity::RELEASE
+    });
     require(&IDENTITY)
 }
 
@@ -102,7 +106,21 @@ pub fn try_identity() -> Option<&'static Identity> {
 /// For tests (here and in other crates): set the release identity, so code that names units
 /// and directories works without a `main`. Does nothing if an identity is already set.
 pub fn use_test_identity() {
+    mark_test();
     let _ = IDENTITY.set(Identity::RELEASE);
+}
+
+/// Set once a test identity was used: code that would touch the real home directory (the
+/// migration's `pending()`, `guard()`) then behaves as if nothing needed doing.
+static TEST_RUN: AtomicBool = AtomicBool::new(false);
+
+fn mark_test() {
+    TEST_RUN.store(true, Ordering::Relaxed);
+}
+
+/// Is this process a test run (a test identity was used)? Never true in a shipped binary.
+pub(crate) fn is_test_run() -> bool {
+    TEST_RUN.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

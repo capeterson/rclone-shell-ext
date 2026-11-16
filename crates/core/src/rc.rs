@@ -473,8 +473,6 @@ pub fn rc_request(
 /// How many rc jobs rclone is still running (the keeper's bisyncs are async jobs inside the
 /// mount's rclone, so stopping the keeper's unit doesn't stop them). `None` when rclone can't
 /// be reached, e.g. because the mount service is down: then there are no jobs.
-///
-/// TODO(integrator): `keeper::running_jobs` is the same query; switch it to this.
 pub fn unfinished_jobs(cfg: &Config) -> Option<usize> {
     let list = rc_request(cfg, "job/list", &serde_json::json!({})).ok()?;
     Some(

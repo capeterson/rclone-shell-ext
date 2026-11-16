@@ -160,7 +160,7 @@ fn offline_cli(args: &[String]) -> Option<i32> {
     // `--pin PATH` / `--unpin PATH` keep a folder offline or stop doing so.
     if let Some(p) = arg(args, "--pin") {
         return Some(report(
-            migrate::set_pinned_guarded(p, true).map(|r| fl!("cli-pin-keeping", folder = r)),
+            keeper::set_pinned(p, true).map(|r| fl!("cli-pin-keeping", folder = r)),
         ));
     }
     if let Some(p) = arg(args, "--unpin") {
