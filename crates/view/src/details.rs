@@ -217,7 +217,7 @@ impl DetailsState {
         if let Some(status) = self.offline_status() {
             return status;
         }
-        let checking = (LOADING, fl!("common-checking"), String::new());
+        let checking = (LOADING, fl!("details-status-checking"), String::new());
         let Some(local) = self.local.ok() else {
             return checking;
         };
@@ -329,11 +329,11 @@ impl DetailsState {
             };
             return vec![
                 (
-                    fl!("common-uploading"),
+                    fl!("details-row-uploading"),
                     from_local(&|s| s.uploading.to_string()),
                 ),
                 (
-                    fl!("common-downloading"),
+                    fl!("details-row-downloading"),
                     from_local(&|s| s.downloading.to_string()),
                 ),
                 // An offline folder's files live in its local copy, not in the mount's cache.
@@ -571,8 +571,8 @@ impl DetailsState {
             cache_state: row(&fl!("details-row-cached-locally")),
             size: row(&fl!("details-row-size")),
             version: row(&fl!("details-row-version")),
-            uploading: row(&fl!("common-uploading")),
-            downloading: row(&fl!("common-downloading")),
+            uploading: row(&fl!("details-row-uploading")),
+            downloading: row(&fl!("details-row-downloading")),
             cached,
             cached_label,
             shared: matches!(&self.drive, Load::Done(Ok(d)) if d.shared),

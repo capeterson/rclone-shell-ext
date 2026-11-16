@@ -143,8 +143,8 @@ Kirigami.ApplicationWindow {
 
                 Repeater {
                     model: details.isDir
-                        ? [[Strings.t("common-uploading"), details.uploading],
-                           [Strings.t("common-downloading"), details.downloading],
+                        ? [[Strings.t("details-row-uploading"), details.uploading],
+                           [Strings.t("details-row-downloading"), details.downloading],
                            [details.cachedLabel, details.cached]]
                         : [[Strings.t("details-row-drive-modified"), details.driveModified],
                            [Strings.t("details-row-cached-locally"), details.cacheState],

@@ -28,6 +28,8 @@ Every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`. No literals i
   The keeper runs under systemd, possibly in another locale than the UI.
 - Never change case or concatenate translated fragments in code (`to_lowercase()`, `a + " " + b`);
   use one message with a Fluent selector or arguments so translators control the sentence.
+- Share an id when the meaning and grammatical role are the same, not just the English text: a
+  state ("Uploading"), a row label and a headline are separate ids even if they read the same.
 - Ids are kebab-case with a surface prefix (`health-`, `panel-`, `details-`, `settings-`,
   `offline-`, `share-`, `drive-`, `cli-`, `common-`; `cosmic-`/`plasma-`/`dolphin-` only for
   shell-only controls). Reuse an existing message before adding one; change wording in one place.

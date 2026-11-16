@@ -24,11 +24,15 @@ common-open = Open
 common-repair = Repair
 common-remove = Remove
 common-cancel = Cancel
-common-checking = Checking…
-common-uploading = Uploading
-common-downloading = Downloading
 
 ## details-: the details window
+# "Uploading"/"Downloading"/"Checking…" exist as a sync state, a row label and a health headline
+# (see health-): separate ids, because other languages inflect them differently.
+details-status-checking = Checking…
+details-state-uploading = Uploading
+details-state-downloading = Downloading
+details-row-uploading = Uploading
+details-row-downloading = Downloading
 
 details-status-error = Error
 details-status-cached-no-compare = Cached (can't compare with Drive)
@@ -202,6 +206,9 @@ offline-heading = Offline folders
 offline-notify-conflicts-resolved = Resolved { $count } conflicting edits in { $folder }
 
 ## health-: health headlines
+health-checking = Checking…
+health-uploading = Uploading
+health-downloading = Downloading
 
 health-healthy = Healthy
 health-transferring = Uploading and downloading
