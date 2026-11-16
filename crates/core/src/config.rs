@@ -2,6 +2,7 @@
 //! Settings shared by every front end: one `config.toml` that all of them read and write.
 
 use serde::{Deserialize, Serialize};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -50,6 +51,14 @@ impl Default for Config {
 pub trait ConfigStore: Send + Sync {
     /// The saved settings, falling back to defaults for anything unreadable.
     fn load(&self) -> Config;
+    /// Like [`load`](Self::load), but says so when the file exists and is corrupt (so a window
+    /// can warn instead of showing defaults as if they were the user's settings).
+    ///
+    /// # Errors
+    /// A message if the settings file exists but can't be parsed.
+    fn load_checked(&self) -> Result<Config, String> {
+        Ok(self.load())
+    }
     /// Change the saved settings: `f` edits a fresh copy, which is written back and returned.
     ///
     /// # Errors
@@ -149,6 +158,38 @@ impl TomlStore {
     fn read(&self) -> Config {
         parse_toml(&std::fs::read_to_string(&self.path).unwrap_or_default())
     }
+
+    /// The file's settings; a missing file is the defaults, a corrupt one is an error.
+    fn read_checked(&self) -> Result<Config, String> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(text) => {
+                toml::from_str::<toml::value::Table>(&text)
+                    .map_err(|e| format!("{}: {e}", self.path.display()))?;
+                Ok(parse_toml(&text))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+            Err(e) => Err(format!("{}: {e}", self.path.display())),
+        }
+    }
+
+    /// Take the cross-process lock (a sidecar file, so the settings file can be replaced while
+    /// it is held). Released when the returned file is dropped.
+    fn lock_file(&self) -> Result<std::fs::File, String> {
+        let mut name = self.path.as_os_str().to_owned();
+        name.push(".lock");
+        let io = |e: std::io::Error| format!("{}: {e}", self.path.display());
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(io)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(PathBuf::from(name))
+            .map_err(io)?;
+        file.lock().map_err(io)?;
+        Ok(file)
+    }
 }
 
 impl ConfigStore for TomlStore {
@@ -156,12 +197,20 @@ impl ConfigStore for TomlStore {
         self.read()
     }
 
+    fn load_checked(&self) -> Result<Config, String> {
+        self.read_checked()
+    }
+
     fn save(&self, f: &mut dyn FnMut(&mut Config)) -> Result<Config, String> {
         let _guard = self
             .write_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let mut cfg = self.read();
+        // Another process (the other front end, the CLI) may be saving too: hold the file lock
+        // across read, edit and replace so neither loses the other's change.
+        let _file_lock = self.lock_file()?;
+        // Never write defaults over a file we couldn't read.
+        let mut cfg = self.read_checked()?;
         f(&mut cfg);
         let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
         write_atomic(&self.path, &text).map_err(|e| format!("{}: {e}", self.path.display()))?;
@@ -203,10 +252,20 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp{}", std::process::id()));
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
-    })
+    })?;
+    // Make the rename itself durable.
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir).and_then(|d| d.sync_all())?;
+    }
+    Ok(())
 }
 
 /// Install the shared `config.toml` store for the process identity. Every binary calls this
@@ -301,7 +360,7 @@ mod tests {
             .flatten()
             .map(|e| e.file_name())
             .collect();
-        assert_eq!(names, ["config.toml"]);
+        assert_eq!(names, ["config.toml", "config.toml.lock"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -329,6 +388,46 @@ mod tests {
         let now = s.changed_since(seen).expect("the file appeared");
         assert!(now.is_some());
         assert_eq!(s.changed_since(now), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_refuses_to_overwrite_a_corrupt_file() {
+        let dir = temp_dir("corrupt");
+        let path = config_path_in(&dir, "x");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "rc_addr = [broken").unwrap();
+        let s = TomlStore::new(path.clone());
+        assert!(s.load_checked().is_err());
+        // Display still falls back to defaults.
+        assert_eq!(s.load(), Config::default());
+        assert!(s.save(&mut |c| c.context_menu = false).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "rc_addr = [broken");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn concurrent_saves_of_different_fields_both_persist() {
+        let dir = temp_dir("conc");
+        let path = config_path_in(&dir, "x");
+        // Separate stores on one file stand in for separate processes: the in-process mutex is
+        // not shared, only the file lock is.
+        let (a, b) = (TomlStore::new(path.clone()), TomlStore::new(path.clone()));
+        std::thread::scope(|sc| {
+            sc.spawn(|| {
+                for i in 0..60 {
+                    a.save(&mut |c| c.sync_interval_secs = 1000 + i).unwrap();
+                }
+            });
+            sc.spawn(|| {
+                for i in 0..60 {
+                    b.save(&mut |c| c.pins = vec![format!("p{i}")]).unwrap();
+                }
+            });
+        });
+        let end = TomlStore::new(path).load_checked().unwrap();
+        assert_eq!(end.sync_interval_secs, 1059);
+        assert_eq!(end.pins, ["p59"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
