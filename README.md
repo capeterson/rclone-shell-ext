@@ -1,37 +1,88 @@
 # rclone-shell-ext
 
-A [COSMIC](https://github.com/pop-os/cosmic-epoch) panel applet that shows the status of an
-[rclone](https://rclone.org) mount: synced, uploading, downloading, both, error, or mount down.
-Click the panel icon for details, per-file transfer progress, the 10 most recently synced files,
-and Open folder / Restart / Stop buttons. "Show all" opens the full history (up to 100 files).
-Clicking a file opens its details window (see below). Files get the same type icons as COSMIC Files.
+rclone status, offline folders and sharing for Linux desktop shells. It watches an
+[rclone](https://rclone.org) mount (synced, uploading, downloading, both, error, or mount down)
+and adds Google-Drive-style **offline folders**: a folder you choose is fully downloaded, kept
+in sync both ways with `rclone bisync`, and works without a connection, right where it is in the
+mount. One shared Rust integration does the rclone, systemd and state work; a thin front end
+per shell shows it: a **COSMIC** panel applet with its own windows, and a **KDE Plasma**
+plasmoid with Kirigami windows and Dolphin sync emblems and context menu. Both shells use one
+identity, so they share one config file and one set of offline folders on a machine.
 
 Status is read from rclone's remote-control API (`--rc`: `core/stats`, `vfs/stats` and
 `core/transferred`) plus `systemctl --user` and `/proc/mounts`.
 
+**COSMIC applet:** click the panel icon for details, per-file transfer progress, the 10 most
+recently synced files, and Open folder / Restart / Stop buttons. "Show all" opens the full
+history (up to 100 files). Clicking a file opens its details window. Files get the same type
+icons as COSMIC Files.
+
+**Plasma:** the plasmoid shows the same status and history; Dolphin shows a sync emblem on every
+file in the Drive folder and adds an **rclone** action for details, offline folders and sharing.
 
 ## Repository layout
 
-This is a monorepo (work in progress, see `docs/architecture.md`):
+A monorepo; read `docs/architecture.md` for how the pieces fit and `AGENTS.md` for the working
+rules.
 
-- `crates/core`: toolkit-free rclone logic shared by every front end.
+- `crates/core`: toolkit-free rclone logic shared by every front end (rc client, status, config,
+  offline folders, units, sharing, migration).
+- `crates/i18n`: the UI text (Fluent) and its loader; `i18n/en/rclone_shell_ext.ftl` is the only
+  copy of every user-visible string.
+- `crates/view`: what a window or panel shows and which buttons apply, as plain Rust.
 - `crates/cli`: the shared `rclone-shell-ext` binary (offline-folder keeper, pins, status, sharing, migration).
 - `cosmic/`: the COSMIC panel applet (`rclone-shell-ext-cosmic`).
-- `plasma/`: the KDE Plasma front end (`daemon/`, `ui/`, `plasmoid/`, `dolphin/`).
+- `plasma/`: the KDE Plasma front end (`daemon/` D-Bus service, `ui/` Kirigami windows,
+  `plasmoid/`, `dolphin/` plugins; the D-Bus contract is `plasma/docs/dbus-interface.md`).
 - `resources/`: the only copy of the SVG assets (`emblems/` status icons, `overlay/` Dolphin emblems, `icons/` app icons, `loading/`).
 
 Run `just --list` for the build, test and install recipes (`just cosmic::...`, `just plasma::...`).
 
 ## Requirements
 
-- COSMIC desktop, Rust toolchain, and libcosmic's system dev libraries
-  (`libxkbcommon-dev libfontconfig-dev libfreetype-dev libexpat1-dev libudev-dev libinput-dev libegl-dev libgbm-dev wayland-protocols`)
 - **rclone 1.75.0 or newer** (minimum supported version; last verified with 1.75.2). The popup
   shows a warning when the running rclone is older. We raise this minimum whenever the app starts
   relying on a newer rclone feature, so check it when upgrading the app.
 - rclone mounted by a systemd **user** service with the rc API enabled and authenticated, e.g.
   `rclone mount remote: ~/Drive --rc --rc-addr 127.0.0.1:5572` with `RCLONE_RC_USER` / `RCLONE_RC_PASS`
-  provided through an `EnvironmentFile`.
+  provided through an `EnvironmentFile`. Point the app at it with the settings below.
+- A Rust toolchain and [`just`](https://github.com/casey/just) (`cargo install just`).
+- For COSMIC: the COSMIC desktop and libcosmic's system dev libraries
+  (`libxkbcommon-dev libfontconfig-dev libfreetype-dev libexpat1-dev libudev-dev libinput-dev libegl-dev libgbm-dev wayland-protocols`).
+- For Plasma: KDE Plasma 6 with Qt 6 and KDE Frameworks 6 development packages (Kirigami,
+  KIO, for the Dolphin plugins), `cmake`, and `kpackagetool6`.
+
+## Install
+
+Pick the shell you use; installing both is fine (they share the binary, config and state).
+
+```
+just cosmic::install-user   # COSMIC applet: then add "rclone UI" in Settings -> Desktop -> Panel -> Configure panel applets
+just plasma::install-user   # Plasma: plasmoid, D-Bus service, Kirigami windows, Dolphin plugins
+```
+
+Everything goes under `~/.local`. After a Plasma install, restart Dolphin with `QT_PLUGIN_PATH`
+set to `~/.local/lib64/qt6/plugins` (Plasma sets it from the next login).
+
+**One-time migration.** Both recipes run `rclone-shell-ext --migrate` in the foreground. If you
+used the earlier per-shell versions (`cosmic-rclone-ui`, `rclone-plasma`) it moves that install
+to the shared identity: it stops the old offline-folder services, moves the local offline copies
+and state, renames bisync's working files so the sync baseline survives (no `--resync`), rewrites
+the units and drop-in under the new names and restarts what was enabled, and updates the COSMIC
+panel entry. It waits until rclone has no running sync jobs and no offline folder is mounted, and
+never deletes your data. If anything is unexpected it changes nothing, prints why, and the recipe
+stops with the old install still working. Preview it with `rclone-shell-ext --migrate --dry-run`.
+Only after it succeeds does the recipe remove the old install's files. If you skip the recipe
+and just start a new binary, the daemon or applet does the move in the background and shows a
+banner meanwhile; offline folders can't be turned on or pinned until it is done.
+
+**Uninstall:** `just cosmic::uninstall-user` / `just plasma::uninstall-user`. They remove the
+offline-folder services first (refused while folders are still kept offline: remove them in
+Settings), then the files they installed. The shared binary stays while the other shell is
+installed. Your config and the data/state directories are left alone.
+
+Side-by-side dev copy for COSMIC: `just cosmic::install-dev` / `just cosmic::uninstall-dev`
+("rclone UI (dev)"; it never migrates and keeps its own config, data and units).
 
 ## Configuration
 
@@ -50,13 +101,15 @@ Defaults (stored in `~/.config/rclone-shell-ext/config.toml`, shared by both fro
 | `sync_interval_secs` | `300` (how often offline folders sync when nothing changes locally) |
 
 The settings window (`--settings`, or the gear in the popup) covers offline folders and the
-right-click menu entry.
+right-click menu entry. Plasma's plasmoid configuration page edits the connection settings
+(`rc_addr`, `env_file`, `service`, `mount_path`, `cache_dir`, `sync_interval_secs`).
 
 ## Offline folders
 
 Like Google Drive's "Available offline": a pinned folder is fully downloaded, kept in sync both
 ways, and works with no connection, right where it is in the Drive folder. Turn it on in
-Settings, then right-click a folder in COSMIC Files → **rclone…** → **Keep offline**.
+Settings, then right-click a folder in COSMIC Files → **rclone…** → **Keep offline**, or in
+Dolphin → **rclone** → **Keep offline**.
 
 How it works:
 
@@ -106,12 +159,12 @@ folder's files (and more than 3) stops with **Needs attention** instead.
 
 See [Known limits](#known-limits) for what offline folders can't do.
 
-Command line: `--pin PATH`, `--unpin PATH`, `--pins`, `--offline-repair FOLDER`, and
-`--offline-remove` (used by `just uninstall-user`; refuses while folders are pinned).
+Command-line control of offline folders: see [Command line](#command-line).
 
-## rclone details window
+## Details window
 
-Right-click a file or folder in COSMIC Files and choose **rclone…** (the applet adds this entry
+Right-click a file or folder in COSMIC Files and choose **rclone…** (in Dolphin: **rclone** →
+**Details…**) (the applet adds this entry
 to COSMIC Files' `context_actions` config when it starts; COSMIC Files cannot nest custom
 actions in a submenu, so it is one entry that opens this window). Clicking an item in the
 applet's recent-files list opens the same window. It shows:
@@ -132,38 +185,41 @@ the item still opens in Drive, just without the dialog.
 
 Command-line helpers: `--menu PATH` opens the window, `--share-url PATH` prints the Manage
 Sharing link, and `--menu-install` / `--menu-remove` add or remove the COSMIC Files entry.
+The Plasma build shows the same content in a Kirigami window.
 
-## The `rclone-ui-core` crate
+## Command line
 
-`core/` (package `rclone-ui-core`, lib `rclone_ui_core`) holds everything that doesn't touch a
-toolkit: the rclone RC client, status, the offline-folder keeper, systemd unit generation, the
-`/etc/fuse.conf` helper, offline setup checks, history merging and MIME icon names. It does not
-depend on libcosmic, so other front ends (e.g. KDE Plasma) can depend on it. The COSMIC applet is
-a thin UI on top of it. Two seams let a front end plug in:
+The shared `rclone-shell-ext` binary (`rclone-shell-ext --help`, or any unrecognised mode, prints this usage and exits with status 2):
 
-- **Config**: every binary calls `config::install_default_store()` at start-up, which installs a
-  `config::TomlStore` on `$XDG_CONFIG_HOME/rclone-shell-ext/config.toml`. Core code reads
-  settings through `config::store()`; front ends that show settings poll `TomlStore::mtime()`.
-- **Identity**: call `identity::set_identity(Identity::RELEASE)` (or `Identity::DEV` for the dev
-  build) at start-up. The slug names the data/state directories, systemd units, drop-in and
-  backup files (`rclone-shell-ext`, or `rclone-shell-ext-dev`). There is no default: asking for
-  the identity before setting it panics.
+| Mode | Does |
+|---|---|
+| `--status [--rc-addr HOST:PORT]` | prints one status snapshot without any panel |
+| `--share-url PATH` / `--share-open PATH` | prints / opens the Manage Sharing link for an item in the mount |
+| `--pin PATH` / `--unpin PATH` / `--pins` | keep a folder offline, stop doing so, list offline folders |
+| `--offline-repair FOLDER` | ask the keeper to rebuild a folder's sync baseline |
+| `--offline-remove` | remove the offline-folder services (refuses while folders are pinned) |
+| `--migrate [--dry-run]` | move an old `cosmic-rclone-ui` / `rclone-plasma` install over |
+| `--offline-keeper`, `--pin-mount ID`, `--pin-unmount ID` | run by the systemd units; not for typing |
 
-An install made by the old per-front-end names (`cosmic-rclone-ui`, `rclone-plasma`) is moved
-over the first time any binary starts (see `docs/architecture.md`); `rclone-shell-ext --migrate
---dry-run` shows what that would do.
+The front-end binaries add their own modes (`rclone-shell-ext-plasma --daemon`, `--menu PATH`,
+`--settings`, `--status --json`; `rclone-shell-ext-cosmic --settings`, `--menu PATH`, ...).
 
-Run all tests with `cargo test --workspace`.
-
-## Build and install
+## Development
 
 ```
-cargo install just
-just install-user      # builds and installs under ~/.local
+just ci            # everything CI runs, for the parts you have toolchains for
+just core::ci      # or just cosmic::ci, just plasma::ci
+just test-live     # the tests that drive a throwaway `rclone rcd` (run after upgrading rclone)
+cargo test --workspace --locked
 ```
 
-Then add "rclone UI" in COSMIC Settings → Desktop → Panel → Configure panel applets.
-`rclone-shell-ext --status` prints one status snapshot without the panel.
+- Tests are hermetic: they use temp directories and injected roots, never the real `$HOME`,
+  and a test run never runs the migration.
+- UI text: every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`; add or change
+  wording there and run `cargo test -p rclone-ui-i18n` (the sync check). See `AGENTS.md`
+  ("UI text") for the id and prefix rules.
+- Before changing the Plasma D-Bus contract, edit `plasma/docs/dbus-interface.md` first.
+- Clippy is pedantic with `-D warnings`; keep `cargo fmt` clean; keep `Cargo.lock` committed.
 
 ## Notes
 
@@ -199,9 +255,9 @@ are never read, so nothing is downloaded to draw the list.
 
 ## Tests against rclone
 
-`just test` runs the unit tests. `just test-live` also runs the ones that drive the installed
-rclone through its rc API (renames, conflicts, delete limits, failure messages). Run it after
-upgrading rclone, and before raising the minimum version above.
+`just test-live` runs the tests that drive the installed rclone through its rc API (renames,
+conflicts, delete limits, failure messages). Run it after upgrading rclone, and before raising
+the minimum version above.
 
 ## License
 
