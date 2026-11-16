@@ -612,9 +612,22 @@ pub fn kind_icon(kind: Kind) -> &'static str {
     }
 }
 
-/// The sharing table as JSON for the QML list: name, address, role, type and an icon.
-pub fn permissions_json(perms: &[Permission]) -> String {
-    let rows: Vec<_> = perms
+/// One row of the sharing table, as finished strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRow {
+    pub name: String,
+    /// Empty when it would only repeat the name.
+    pub address: String,
+    /// "Name <address>", or just the name; for tooltips.
+    pub full: String,
+    pub role: String,
+    pub kind_label: String,
+    pub kind: Kind,
+}
+
+/// The sharing table rows, in the order Drive listed them.
+pub fn permission_rows(perms: &[Permission]) -> Vec<PermissionRow> {
+    perms
         .iter()
         .map(|p| {
             let address = if p.address == p.name { "" } else { &p.address };
@@ -623,13 +636,30 @@ pub fn permissions_json(perms: &[Permission]) -> String {
             } else {
                 format!("{} <{address}>", p.name)
             };
+            PermissionRow {
+                name: p.name.clone(),
+                address: address.to_string(),
+                full,
+                role: p.role.label(),
+                kind_label: p.kind.label(),
+                kind: p.kind,
+            }
+        })
+        .collect()
+}
+
+/// The sharing table as JSON for the QML list: name, address, role, type and an icon.
+pub fn permissions_json(perms: &[Permission]) -> String {
+    let rows: Vec<_> = permission_rows(perms)
+        .into_iter()
+        .map(|r| {
             json!({
-                "name": p.name,
-                "address": address,
-                "full": full,
-                "role": p.role.label(),
-                "kind": p.kind.label(),
-                "icon": kind_icon(p.kind),
+                "name": r.name,
+                "address": r.address,
+                "full": r.full,
+                "role": r.role,
+                "kind": r.kind_label,
+                "icon": kind_icon(r.kind),
             })
         })
         .collect();
@@ -1097,6 +1127,9 @@ mod tests {
         assert_eq!(v[1]["full"], "same");
         assert_eq!(v[1]["kind"], "Anyone with link");
         assert_eq!(permissions_json(&[]), "[]");
+        let rows = permission_rows(&[perm("amy", Role::Editor)]);
+        assert_eq!(rows[0].full, "amy <amy@example.com>");
+        assert_eq!(rows[0].kind, Kind::User);
     }
 
     // ---- buttons ----

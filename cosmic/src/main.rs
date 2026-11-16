@@ -28,6 +28,7 @@ pub const APP_ID: &str = if DEV {
 fn main() -> cosmic::iced::Result {
     set_identity(Identity::from_override(option_env!("APP_ID_OVERRIDE")));
     rclone_ui_core::config::install_default_store();
+    rclone_ui_i18n::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     rclone_shell_ext_cli::startup(&args);
     // `--settings` opens the settings window (also reachable from the panel popup).

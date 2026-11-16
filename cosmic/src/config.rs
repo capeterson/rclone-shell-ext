@@ -2,7 +2,7 @@
 //! COSMIC side of the settings: the plain [`Config`] and its shared `config.toml` store live in
 //! `rclone-ui-core`; here are the conveniences the UI code uses, and the change watch.
 
-pub use rclone_ui_core::config::{expand, Config};
+pub use rclone_ui_core::config::Config;
 use rclone_ui_core::config::{store, TomlStore};
 use std::time::{Duration, SystemTime};
 
