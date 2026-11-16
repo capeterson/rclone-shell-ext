@@ -4448,6 +4448,8 @@ dependencies = [
  "libcosmic",
  "rclone-shell-ext",
  "rclone-ui-core",
+ "rclone-ui-i18n",
+ "rclone-ui-view",
  "serde",
  "tokio",
 ]
