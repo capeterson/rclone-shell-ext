@@ -254,6 +254,27 @@ migrate-line = rclone-shell-ext: { $text }
 migrate-done-from = migrated the old { $origin } install.
 migrate-done-nothing = migrated (nothing to move).
 migrate-failed = rclone-shell-ext: migrating the old install failed: { $error }
+migrate-step-wait-quiet = wait until rclone has no running sync jobs and no offline folder is mounted
+migrate-step-enable-keeper = enable the new offline-folder keeper (and start it if the Drive mount is running)
+migrate-error-sync-in-flight =
+    rclone is still running { $count ->
+        [one] 1 sync
+       *[other] { $count } syncs
+    } started by the old install, so nothing was moved. The old offline-folder service was put back; try again in a few minutes.
+migrate-error-mount-in-use = { $path } is still mounted by the old install, so nothing was moved. The old offline-folder service was put back; try again in a few minutes.
+migrate-error-lock-timeout = another rclone-shell-ext process has been migrating for over a minute; try again in a moment
+migrate-error-old-install-present = An old cosmic-rclone-ui or rclone-plasma install hasn't been moved over yet. Run `rclone-shell-ext --migrate` first.
+migrate-error-dev-build = the dev build never migrates; use the installed rclone-shell-ext
+migrate-log-dir-kept = couldn't remove the directory { $path }: { $error }
+migrate-label-pending = Moving your old offline-folder setup…
+migrate-label-ambiguous = The old COSMIC and Plasma installs both use offline folders; turn them off in one and try again
+migrate-label-conflict = Something is in the way of moving the old install; run `rclone-shell-ext --migrate` for details
+migrate-label-sync-in-flight = A sync is still running; the move will be tried again
+migrate-label-mount-in-use = An offline folder is still mounted; the move will be tried again
+migrate-label-lock-timeout = Another process is moving the old install
+migrate-label-old-install-present = The old install hasn't been moved over yet
+migrate-label-dev-build = The dev build doesn't move old installs
+migrate-label-failed = Moving the old install failed; run `rclone-shell-ext --migrate` for details
 
 ## ---- Wave 3 work zones: each agent adds ids ONLY under its own zone (any prefix), so
 ## ---- parallel branches merge cleanly. The zones are folded into the sections above afterwards.

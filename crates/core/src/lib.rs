@@ -5,6 +5,7 @@
 //! directories and backups; there is no default) and [`config::install_default_store`]
 //! (the shared `config.toml`).
 
+pub mod bisync_name;
 pub mod config;
 pub mod conflict;
 pub mod drive;

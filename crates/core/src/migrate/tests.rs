@@ -3,7 +3,7 @@
 //! here can reach the real home directory or the real systemd.
 
 use super::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -15,12 +15,35 @@ fn put(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// A fake `systemd --user`: which units are enabled, active and loaded (a unit file is only
+/// known to systemd after `daemon-reload`), so an `enable` of a unit nobody reloaded fails the
+/// way the real thing does.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct SystemdState {
+    enabled: BTreeSet<String>,
+    active: BTreeSet<String>,
+    loaded: BTreeSet<String>,
+}
+
 struct Sandbox {
     root: PathBuf,
     calls: RefCell<Vec<String>>,
-    enabled: RefCell<BTreeSet<String>>,
-    active: RefCell<BTreeSet<String>>,
-    pins_listed: RefCell<Vec<String>>,
+    sd: RefCell<SystemdState>,
+    /// Unfinished-job counts to report, one per query; the last one repeats.
+    jobs: RefCell<Vec<usize>>,
+    /// `None`: the rc server can't be reached.
+    jobs_reachable: Cell<bool>,
+    mountinfo: RefCell<String>,
+    sleeps: Cell<u32>,
+    /// Make every systemctl that changes something fail.
+    break_systemctl: Cell<bool>,
+}
+
+fn glob_match(pattern: &str, unit: &str) -> bool {
+    match pattern.split_once('*') {
+        Some((pre, post)) => unit.starts_with(pre) && unit.ends_with(post),
+        None => pattern == unit,
+    }
 }
 
 impl Sandbox {
@@ -38,9 +61,12 @@ impl Sandbox {
         Self {
             root,
             calls: RefCell::default(),
-            enabled: RefCell::default(),
-            active: RefCell::default(),
-            pins_listed: RefCell::default(),
+            sd: RefCell::default(),
+            jobs: RefCell::new(vec![0]),
+            jobs_reachable: Cell::new(true),
+            mountinfo: RefCell::default(),
+            sleeps: Cell::new(0),
+            break_systemctl: Cell::new(false),
         }
     }
 
@@ -56,55 +82,127 @@ impl Sandbox {
     fn units(&self) -> PathBuf {
         self.config().join("systemd/user")
     }
+    fn enable_old(&self, unit: &str) {
+        self.sd.borrow_mut().enabled.insert(unit.into());
+    }
+    fn activate(&self, unit: &str) {
+        self.sd.borrow_mut().active.insert(unit.into());
+    }
+    fn systemd(&self) -> SystemdState {
+        self.sd.borrow().clone()
+    }
 
-    fn run_with(
-        &self,
-        exe: &str,
-        f: impl FnOnce(&Env) -> Result<Vec<String>, String>,
-    ) -> Result<Vec<String>, String> {
-        let runner = |args: &[&str]| -> Result<String, String> {
-            let line = args.join(" ");
-            let unit = args.last().copied().unwrap_or_default().to_string();
-            match args.first().copied() {
-                Some("is-enabled") => {
-                    return if self.enabled.borrow().contains(&unit) {
-                        Ok("enabled\n".into())
-                    } else {
-                        Err("disabled".into())
-                    };
-                }
-                Some("is-active") => {
-                    return if self.active.borrow().contains(&unit) {
-                        Ok("active\n".into())
-                    } else {
-                        Err("inactive".into())
-                    };
-                }
-                Some("list-units") => {
-                    let rows: Vec<String> = self
-                        .pins_listed
-                        .borrow()
-                        .iter()
-                        .map(|u| format!("{u} loaded active running x"))
-                        .collect();
-                    return Ok(rows.join("\n"));
-                }
-                _ => {}
-            }
-            self.calls.borrow_mut().push(line);
-            Ok(String::new())
+    /// `daemon-reload`: systemd re-reads the unit files.
+    fn reload(&self) {
+        let loaded = std::fs::read_dir(self.units())
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().is_file())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.sd.borrow_mut().loaded = loaded;
+    }
+
+    fn fake_systemctl(&self, args: &[&str]) -> Result<String, String> {
+        let verb = args.first().copied().unwrap_or_default();
+        let unit = args.last().copied().unwrap_or_default().to_string();
+        let is_loaded = |sd: &SystemdState, u: &str| {
+            sd.loaded.contains(u)
+                || u.split_once('@').is_some_and(|(pre, post)| {
+                    let ext = post.rsplit('.').next().unwrap_or_default();
+                    sd.loaded.contains(&format!("{pre}@.{ext}"))
+                })
         };
+        let mut sd = self.sd.borrow_mut();
+        match verb {
+            "is-enabled" => {
+                return if sd.enabled.contains(&unit) {
+                    Ok("enabled\n".into())
+                } else {
+                    Err("disabled".into())
+                };
+            }
+            "is-active" => {
+                return if sd.active.contains(&unit) {
+                    Ok("active\n".into())
+                } else {
+                    Err("inactive".into())
+                };
+            }
+            "list-units" => {
+                let rows: Vec<String> = sd
+                    .active
+                    .iter()
+                    .filter(|u| glob_match(&unit, u))
+                    .map(|u| format!("{u} loaded active running x"))
+                    .collect();
+                return Ok(rows.join("\n"));
+            }
+            _ => {}
+        }
+        self.calls.borrow_mut().push(args.join(" "));
+        if self.break_systemctl.get() {
+            return Err("bus unavailable".into());
+        }
+        let globbed = unit.contains('*');
+        if matches!(verb, "stop" | "disable" | "enable" | "start")
+            && !globbed
+            && !is_loaded(&sd, &unit)
+        {
+            return Err(format!("Unit {unit} not found."));
+        }
+        match verb {
+            "stop" => sd.active.retain(|u| !glob_match(&unit, u)),
+            "disable" => {
+                sd.enabled.remove(&unit);
+            }
+            "enable" => {
+                sd.enabled.insert(unit.clone());
+                if args.contains(&"--now") {
+                    sd.active.insert(unit);
+                }
+            }
+            "start" => {
+                sd.active.insert(unit);
+            }
+            "daemon-reload" => {
+                drop(sd);
+                self.reload();
+            }
+            _ => {}
+        }
+        Ok(String::new())
+    }
+
+    fn run_with<T>(&self, exe: &str, f: impl FnOnce(&Env) -> T) -> T {
+        let runner = |args: &[&str]| self.fake_systemctl(args);
+        let jobs = |_: &Config| -> Option<usize> {
+            if !self.jobs_reachable.get() {
+                return None;
+            }
+            let mut v = self.jobs.borrow_mut();
+            Some(if v.len() > 1 { v.remove(0) } else { v[0] })
+        };
+        let mountinfo = || self.mountinfo.borrow().clone();
+        let sleep = |_: Duration| self.sleeps.set(self.sleeps.get() + 1);
         let env = Env {
             config_home: self.config(),
             data_home: self.data(),
             state_home: self.state(),
             systemctl: &runner,
             exe: PathBuf::from(exe),
+            unfinished_jobs: &jobs,
+            mountinfo: &mountinfo,
+            sleep: &sleep,
+            quiet_timeout: Duration::from_secs(120),
+            poll: Duration::from_secs(2),
         };
         f(&env)
     }
 
-    fn migrate(&self) -> Result<Vec<String>, String> {
+    fn migrate(&self) -> Result<Vec<String>, MigrationFailure> {
         self.run_with("/new/bin/rclone-shell-ext", run)
     }
 
@@ -205,15 +303,11 @@ impl Sandbox {
         if offline {
             self.seed_units("rclone-plasma", "rclone-gdrive.service");
             self.seed_offline_data("rclone-plasma");
-            self.enabled
-                .borrow_mut()
-                .insert("rclone-plasma-offline.service".into());
-            self.active
-                .borrow_mut()
-                .insert("rclone-plasma-offline.service".into());
-            self.pins_listed
-                .borrow_mut()
-                .push(format!("rclone-plasma-pin@{ID}.service"));
+            self.enable_old("rclone-plasma-offline.service");
+            self.activate("rclone-plasma-offline.service");
+            self.activate(&format!("rclone-plasma-pin@{ID}.service"));
+            self.activate("rclone-gdrive.service");
+            self.reload();
         }
     }
 
@@ -231,12 +325,10 @@ impl Sandbox {
         if offline {
             self.seed_units("cosmic-rclone-ui", "rclone-gdrive.service");
             self.seed_offline_data("cosmic-rclone-ui");
-            self.enabled
-                .borrow_mut()
-                .insert("cosmic-rclone-ui-offline.service".into());
-            self.active
-                .borrow_mut()
-                .insert("cosmic-rclone-ui-offline.service".into());
+            self.enable_old("cosmic-rclone-ui-offline.service");
+            self.activate("cosmic-rclone-ui-offline.service");
+            self.activate("rclone-gdrive.service");
+            self.reload();
         }
     }
 
@@ -385,11 +477,14 @@ fn plasma_only_moves_everything_and_keeps_the_baseline() {
     assert_eq!(
         calls,
         [
-            "stop rclone-plasma-offline.service".to_string(),
-            format!("stop rclone-plasma-pin@{ID}.service"),
-            "disable rclone-plasma-offline.service".into(),
-            "daemon-reload".into(),
-            "enable --now rclone-shell-ext-offline.service".into(),
+            "stop rclone-plasma-offline.service",
+            "disable rclone-plasma-offline.service",
+            "reset-failed rclone-plasma-offline.service",
+            "stop rclone-plasma-pin@*.service",
+            "reset-failed rclone-plasma-pin@*.service",
+            "daemon-reload",
+            "enable rclone-shell-ext-offline.service",
+            "start rclone-shell-ext-offline.service",
         ]
     );
     assert!(sb.state().join("rclone-shell-ext/migrated-v1").exists());
@@ -456,17 +551,17 @@ fn with_both_installs_the_one_with_the_enabled_keeper_wins() {
     sb.seed_cosmic(true);
     sb.seed_plasma(true);
     // The COSMIC keeper exists but isn't enabled; Plasma's is.
-    sb.enabled
+    sb.sd
         .borrow_mut()
+        .enabled
         .remove("cosmic-rclone-ui-offline.service");
-    sb.active
+    sb.sd
         .borrow_mut()
+        .active
         .remove("cosmic-rclone-ui-offline.service");
-    let plan = sb
-        .run_with("/new/bin/rclone-shell-ext", |e| {
-            Ok(vec![plan(e).unwrap().to_string()])
-        })
-        .unwrap();
+    let plan = vec![sb.run_with("/new/bin/rclone-shell-ext", |e| {
+        plan(e).unwrap().to_string()
+    })];
     assert!(plan[0].contains("old Plasma install"), "{plan:?}");
     assert!(
         plan[0].contains("old COSMIC install was also found"),
@@ -493,7 +588,7 @@ fn two_enabled_keepers_is_ambiguous_and_changes_nothing() {
     sb.seed_cosmic(true);
     sb.seed_plasma(true);
     let before = sb.snapshot();
-    let err = sb.migrate().unwrap_err();
+    let err = sb.migrate().unwrap_err().to_string();
     assert!(err.contains("isn't clear which one is in use"), "{err}");
     assert_eq!(sb.snapshot(), before);
     assert_eq!(sb.calls().len(), 0);
@@ -506,7 +601,7 @@ fn an_unexpected_state_aborts_before_the_first_change() {
     sb.seed_plasma(true);
     put(&sb.data().join("rclone-shell-ext/other.txt"), "someone's");
     let before = sb.snapshot();
-    let err = sb.migrate().unwrap_err();
+    let err = sb.migrate().unwrap_err().to_string();
     assert!(err.contains("already exists and isn't empty"), "{err}");
     assert_eq!(sb.snapshot(), before);
     assert_eq!(sb.calls().len(), 0);
@@ -519,7 +614,7 @@ fn an_unexpected_state_aborts_before_the_first_change() {
         "[Service]\nExecStart=/mine\n",
     );
     let before = sb.snapshot();
-    let err = sb.migrate().unwrap_err();
+    let err = sb.migrate().unwrap_err().to_string();
     assert!(err.contains("isn't one this app wrote"), "{err}");
     assert_eq!(sb.snapshot(), before);
 
@@ -532,14 +627,18 @@ fn an_unexpected_state_aborts_before_the_first_change() {
         "maybe",
     );
     let before = sb.snapshot();
-    assert!(sb.migrate().unwrap_err().contains("offline_enabled"));
+    assert!(sb
+        .migrate()
+        .unwrap_err()
+        .to_string()
+        .contains("offline_enabled"));
     assert_eq!(sb.snapshot(), before);
 
     // The shared binary can't be found, and units would need it.
     let sb = Sandbox::new();
     sb.seed_plasma(true);
     let before = sb.snapshot();
-    let err = sb.run_with("", run).unwrap_err();
+    let err = sb.run_with("", run).unwrap_err().to_string();
     assert!(
         err.contains("can't find the `rclone-shell-ext` program"),
         "{err}"
@@ -602,9 +701,7 @@ fn running_again_after_success_changes_nothing() {
     assert_eq!(sb.migrate().unwrap(), Vec::<String>::new());
     assert_eq!(sb.snapshot(), before);
     assert_eq!(sb.calls().len(), calls);
-    let plan = sb
-        .run_with("/x", |e| Ok(vec![plan(e).unwrap().to_string()]))
-        .unwrap();
+    let plan = vec![sb.run_with("/x", |e| plan(e).unwrap().to_string())];
     assert!(plan[0].contains("Already migrated"), "{plan:?}");
 }
 
@@ -613,12 +710,9 @@ fn dry_run_describes_the_plan_and_changes_nothing() {
     let sb = Sandbox::new();
     sb.seed_plasma(true);
     let before = sb.snapshot();
-    let text = sb
-        .run_with("/new/bin/rclone-shell-ext", |e| {
-            Ok(vec![plan(e).unwrap().to_string()])
-        })
-        .unwrap()
-        .remove(0);
+    let text = sb.run_with("/new/bin/rclone-shell-ext", |e| {
+        plan(e).unwrap().to_string()
+    });
     assert_eq!(sb.snapshot(), before);
     assert_eq!(sb.calls().len(), 0);
     for want in [
@@ -634,46 +728,416 @@ fn dry_run_describes_the_plan_and_changes_nothing() {
     }
 }
 
+// ---- the old keeper, in-flight jobs, mounts ----
+
+fn plasma_mountinfo(sb: &Sandbox) -> String {
+    format!(
+        "100 1 0:50 / {drive} rw - fuse.rclone gdrive: rw\n\
+         101 100 0:51 / {drive}/wallpaper rw - fuse.rclone {src} rw\n\
+         102 1 0:52 / /boot rw - ext4 /dev/sda1 rw\n",
+        drive = sb.root.join("GoogleDrive").display(),
+        src = sb.data().join("rclone-plasma/offline").join(ID).display(),
+    )
+}
+
 #[test]
-fn a_keeper_that_was_not_running_is_not_started() {
+fn offline_mounts_are_found_by_source_or_by_place_in_the_drive() {
+    let sb = Sandbox::new();
+    let mi = plasma_mountinfo(&sb);
+    let drive = sb.root.join("GoogleDrive").to_string_lossy().into_owned();
+    let old = sb.data().join("rclone-plasma");
+    // The pin mount is found; the Drive mount itself and other file systems are not.
+    let found = offline_mount_left(&mi, &old, &drive).unwrap();
+    assert!(found.ends_with("GoogleDrive/wallpaper"), "{found}");
+    let drive_only = mi.lines().next().unwrap();
+    assert_eq!(offline_mount_left(drive_only, &old, &drive), None);
+    assert_eq!(
+        offline_mount_left("1 1 0:1 / /boot rw - ext4 /dev/x rw", &old, &drive),
+        None
+    );
+    // By source alone (mounted somewhere else) and by place alone (some other source).
+    let by_source = format!(
+        "1 1 0:1 / /mnt/x rw - fuse.rclone {}/offline/a rw",
+        old.display()
+    );
+    assert!(offline_mount_left(&by_source, &old, &drive).is_some());
+    let by_place = format!("1 1 0:1 / {drive}/Docs rw - fuse.rclone elsewhere rw");
+    assert!(offline_mount_left(&by_place, &old, &drive).is_some());
+    // Octal escapes in mount points.
+    assert_eq!(unescape_octal("/a\\040b"), "/a b");
+}
+
+#[test]
+fn waits_for_an_in_flight_sync_before_moving_anything() {
     let sb = Sandbox::new();
     sb.seed_plasma(true);
-    sb.active.borrow_mut().clear();
-    sb.pins_listed.borrow_mut().clear();
+    *sb.jobs.borrow_mut() = vec![2, 1, 0];
     sb.migrate().unwrap();
-    assert_eq!(
-        sb.calls(),
-        [
-            "disable rclone-plasma-offline.service",
-            "daemon-reload",
-            "enable rclone-shell-ext-offline.service"
-        ]
+    assert_eq!(sb.sleeps.get(), 2, "polled until the jobs were gone");
+    assert!(sb.state().join("rclone-shell-ext/migrated-v1").exists());
+    // The stops happened before the first rename, and the wait between them.
+    let calls = sb.calls();
+    assert_eq!(calls[0], "stop rclone-plasma-offline.service");
+}
+
+#[test]
+fn a_sync_that_never_ends_puts_the_old_keeper_back_and_changes_nothing() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    *sb.jobs.borrow_mut() = vec![1];
+    let (files, sd_before) = (sb.snapshot(), sb.systemd());
+    let err = sb.migrate().unwrap_err();
+    assert_eq!(err.code, MigrateError::SyncInFlight, "{err}");
+    assert!(err.message.contains("still running 1 sync"), "{err}");
+    // 120 s at 2 s a poll.
+    assert_eq!(sb.sleeps.get(), 59);
+    // No file moved; the journal is gone; the old keeper is enabled and running again.
+    assert_eq!(sb.snapshot(), files);
+    let sd = sb.systemd();
+    assert!(sd.enabled.contains("rclone-plasma-offline.service"));
+    assert!(sd.active.contains("rclone-plasma-offline.service"));
+    assert_eq!(sd.enabled.len(), sd_before.enabled.len());
+}
+
+#[test]
+fn a_pin_mount_that_stays_puts_the_old_keeper_back() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    // The old config's mount path is `~/GoogleDrive`; point it at the sandbox.
+    put(
+        &sb.config().join("rclone-plasmarc"),
+        &format!(
+            "[General]\nmount_path={}\noffline_enabled=true\npins=wallpaper\n",
+            sb.root.join("GoogleDrive").display()
+        ),
     );
+    *sb.mountinfo.borrow_mut() = plasma_mountinfo(&sb);
+    let files = sb.snapshot();
+    let err = sb.migrate().unwrap_err();
+    assert_eq!(err.code, MigrateError::MountInUse, "{err}");
+    assert_eq!(sb.snapshot(), files);
+    assert!(sb
+        .systemd()
+        .active
+        .contains("rclone-plasma-offline.service"));
+}
+
+#[test]
+fn an_unreachable_rc_server_means_no_jobs() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    sb.jobs_reachable.set(false);
+    sb.migrate().unwrap();
+    assert_eq!(sb.sleeps.get(), 0);
+}
+
+#[test]
+fn the_old_units_are_stopped_even_when_systemd_says_they_are_not_active() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    // "activating" (an auto-restarting keeper) is not "active" to is-active.
+    sb.sd.borrow_mut().active.clear();
+    sb.migrate().unwrap();
+    let calls = sb.calls();
+    for want in [
+        "stop rclone-plasma-offline.service",
+        "disable rclone-plasma-offline.service",
+        "reset-failed rclone-plasma-offline.service",
+        "stop rclone-plasma-pin@*.service",
+    ] {
+        assert!(calls.contains(&want.to_string()), "{want}: {calls:?}");
+    }
+    assert!(sb
+        .systemd()
+        .enabled
+        .contains("rclone-shell-ext-offline.service"));
+}
+
+#[test]
+fn a_keeper_that_was_not_running_is_enabled_but_not_started() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    sb.sd.borrow_mut().active.clear();
+    sb.migrate().unwrap();
+    let sd = sb.systemd();
+    assert!(sd.enabled.contains("rclone-shell-ext-offline.service"));
+    assert!(sd.active.is_empty(), "{sd:?}");
 }
 
 #[test]
 fn a_failing_stop_leaves_the_files_alone() {
     let sb = Sandbox::new();
     sb.seed_plasma(true);
+    sb.break_systemctl.set(true);
     let before = sb.snapshot();
-    let runner = |args: &[&str]| -> Result<String, String> {
-        match args[0] {
-            "is-enabled" | "is-active" => Ok("enabled".into()),
-            "list-units" => Ok(String::new()),
-            _ => Err("bus unavailable".into()),
-        }
-    };
-    let env = Env {
-        config_home: sb.config(),
-        data_home: sb.data(),
-        state_home: sb.state(),
-        systemctl: &runner,
-        exe: PathBuf::from("/x/rclone-shell-ext"),
-    };
-    let err = run(&env).unwrap_err();
+    let err = sb.migrate().unwrap_err().to_string();
     assert!(
         err.contains("step 1") && err.contains("bus unavailable"),
         "{err}"
     );
-    assert_eq!(sb.snapshot(), before);
+    // Only the journal (written before the first change) differs.
+    let mut after = sb.snapshot();
+    assert!(after
+        .remove("state/rclone-shell-ext-migrate-journal.json")
+        .is_some());
+    assert_eq!(after, before);
+}
+
+// ---- interrupted runs end where an uninterrupted one does ----
+
+/// The files and systemd state, with the sandbox's own name (it is in bisync's file names)
+/// replaced so two sandboxes can be compared.
+fn end_state(sb: &Sandbox) -> (BTreeMap<String, String>, SystemdState) {
+    let name = sb.root.file_name().unwrap().to_string_lossy().into_owned();
+    let norm = |s: &str| {
+        s.replace(&name, "SANDBOX")
+            .replace(&name.replace('/', "_"), "SANDBOX")
+    };
+    let files = sb
+        .snapshot()
+        .into_iter()
+        .map(|(k, v)| (norm(&k), norm(&v)))
+        .collect();
+    (files, sb.systemd())
+}
+
+fn assert_resume_matches(seed: impl Fn(&Sandbox)) {
+    let whole = Sandbox::new();
+    seed(&whole);
+    whole.migrate().unwrap();
+    let want = end_state(&whole);
+    let steps = {
+        let sb = Sandbox::new();
+        seed(&sb);
+        sb.run_with("/new/bin/rclone-shell-ext", |e| {
+            plan(e).unwrap().steps.len()
+        })
+    };
+    for k in 0..steps {
+        let sb = Sandbox::new();
+        seed(&sb);
+        let err = sb
+            .run_with("/new/bin/rclone-shell-ext", |e| run_limited(e, Some(k)))
+            .unwrap_err();
+        assert_eq!(err.message, "interrupted");
+        // The journal is there as soon as anything may have changed.
+        assert!(
+            sb.state()
+                .join("rclone-shell-ext-migrate-journal.json")
+                .exists(),
+            "interrupted after {k} steps"
+        );
+        sb.migrate().unwrap();
+        let got = end_state(&sb);
+        // The temp roots differ in name only through their content, which has no paths of
+        // its own, so a straight comparison is fine.
+        assert_eq!(
+            got.1, want.1,
+            "systemd state after interrupting at step {k}"
+        );
+        assert_eq!(got.0, want.0, "files after interrupting at step {k}");
+    }
+}
+
+#[test]
+fn a_plasma_run_interrupted_at_any_step_ends_like_an_uninterrupted_one() {
+    assert_resume_matches(|sb| sb.seed_plasma(true));
+}
+
+#[test]
+fn a_cosmic_run_interrupted_at_any_step_ends_like_an_uninterrupted_one() {
+    assert_resume_matches(|sb| {
+        sb.seed_cosmic(true);
+        sb.seed_panel();
+    });
+}
+
+#[test]
+fn an_interrupted_run_with_a_stopped_mount_service_still_enables_but_does_not_start() {
+    assert_resume_matches(|sb| {
+        sb.seed_plasma(true);
+        sb.sd.borrow_mut().active.remove("rclone-gdrive.service");
+    });
+}
+
+#[test]
+fn the_journal_records_codes_and_is_gone_after_success() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    let _ = sb.run_with("/new/bin/rclone-shell-ext", |e| run_limited(e, Some(1)));
+    let text =
+        std::fs::read_to_string(sb.state().join("rclone-shell-ext-migrate-journal.json")).unwrap();
+    let j: Journal = serde_json::from_str(&text).unwrap();
+    assert_eq!(j.source, "plasma");
+    assert!(j.keeper_was_enabled && j.keeper_was_active && j.offline_enabled && j.had_units);
+    assert_eq!(j.pins, [ID]);
+    sb.migrate().unwrap();
+    assert!(!sb
+        .state()
+        .join("rclone-shell-ext-migrate-journal.json")
+        .exists());
+}
+
+// ---- pending, the guard, the lock, small things ----
+
+#[test]
+fn pending_follows_the_marker_and_the_old_install() {
+    let sb = Sandbox::new();
+    let st = |sb: &Sandbox| pending_in(&sb.config(), &sb.data(), &sb.state());
+    assert_eq!(st(&sb), MigrationStatus::NotNeeded);
+    sb.seed_plasma(true);
+    assert_eq!(st(&sb), MigrationStatus::Pending);
+    // A failed attempt is remembered as a code.
+    let res = sb.run_with("/new/bin/rclone-shell-ext", |e| {
+        run_locked(e, Duration::from_secs(1))
+    });
+    assert!(res.is_ok());
+    assert_eq!(st(&sb), MigrationStatus::NotNeeded);
+
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    *sb.jobs.borrow_mut() = vec![1];
+    assert!(sb
+        .run_with("/new/bin/rclone-shell-ext", |e| run_locked(
+            e,
+            Duration::from_secs(1)
+        ))
+        .is_err());
+    let failed = st(&sb);
+    assert_eq!(failed, MigrationStatus::Failed(MigrateError::SyncInFlight));
+    assert_eq!(failed.code(), "sync-in-flight");
+    assert_eq!(MigrationStatus::Pending.code(), "pending");
+    assert_eq!(MigrationStatus::NotNeeded.code(), "none");
+    assert_eq!(MigrationStatus::NotNeeded.label(), "");
+    assert_ne!(failed.label(), "");
+    // Asking changed nothing; a later success clears the failure.
+    *sb.jobs.borrow_mut() = vec![0];
+    sb.run_with("/new/bin/rclone-shell-ext", |e| {
+        run_locked(e, Duration::from_secs(1))
+    })
+    .unwrap();
+    assert_eq!(st(&sb), MigrationStatus::NotNeeded);
+    assert!(!sb.state().join("rclone-shell-ext-migrate-error").exists());
+}
+
+#[test]
+fn pending_does_not_change_anything() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    let (files, sd) = (sb.snapshot(), sb.systemd());
+    let _ = pending_in(&sb.config(), &sb.data(), &sb.state());
+    assert_eq!((sb.snapshot(), sb.systemd()), (files, sd));
+    assert_eq!(sb.calls().len(), 0);
+}
+
+#[test]
+fn offline_setup_is_refused_while_an_old_install_waits() {
+    for st in [
+        MigrationStatus::Pending,
+        MigrationStatus::Failed(MigrateError::Conflict),
+    ] {
+        let err = guard_status(st).unwrap_err();
+        assert_eq!(err.code, MigrateError::OldInstallPresent);
+        assert!(err.message.contains("--migrate"), "{err}");
+    }
+    assert!(guard_status(MigrationStatus::NotNeeded).is_ok());
+}
+
+#[test]
+fn the_lock_loser_waits_for_the_marker() {
+    let sb = Sandbox::new();
+    sb.run_with("/x", |env| {
+        // Free: taken, and released on drop.
+        let g = acquire_wait(env, Duration::from_secs(60)).unwrap();
+        assert!(g.is_some() && env.lock_path().exists());
+        // Held (fresh): waits, and sees the marker appear.
+        let marker = env.marker();
+        let sleep_then_marker = |_: Duration| {
+            put(&marker, "done");
+        };
+        let env2 = Env {
+            sleep: &sleep_then_marker,
+            ..clone_env(env)
+        };
+        assert!(acquire_wait(&env2, Duration::from_secs(60))
+            .unwrap()
+            .is_none());
+        drop(g);
+        assert!(!env.lock_path().exists());
+    });
+    // Held, and the marker never comes: a timeout with its code.
+    let sb = Sandbox::new();
+    sb.run_with("/x", |env| {
+        put(&env.lock_path(), "");
+        let err = acquire_wait(env, Duration::from_secs(60)).unwrap_err();
+        assert_eq!(err.code, MigrateError::LockTimeout);
+        assert_eq!(sb.sleeps.get(), 30);
+    });
+}
+
+fn clone_env<'a>(e: &Env<'a>) -> Env<'a> {
+    Env {
+        config_home: e.config_home.clone(),
+        data_home: e.data_home.clone(),
+        state_home: e.state_home.clone(),
+        systemctl: e.systemctl,
+        exe: e.exe.clone(),
+        unfinished_jobs: e.unfinished_jobs,
+        mountinfo: e.mountinfo,
+        sleep: e.sleep,
+        quiet_timeout: e.quiet_timeout,
+        poll: e.poll,
+    }
+}
+
+#[test]
+fn the_dev_build_refuses_to_migrate() {
+    let err = refuse_dev(true).unwrap_err();
+    assert_eq!(err.code, MigrateError::DevBuild);
+    assert!(refuse_dev(false).is_ok());
+}
+
+#[test]
+fn error_codes_round_trip() {
+    for e in [
+        MigrateError::Ambiguous,
+        MigrateError::Conflict,
+        MigrateError::SyncInFlight,
+        MigrateError::MountInUse,
+        MigrateError::LockTimeout,
+        MigrateError::OldInstallPresent,
+        MigrateError::DevBuild,
+        MigrateError::Failed,
+    ] {
+        assert_eq!(MigrateError::from_code(e.code()), e);
+        assert_ne!(e.label(), "");
+    }
+    assert_eq!(MigrateError::from_code("???"), MigrateError::Failed);
+}
+
+#[test]
+fn a_directory_that_cannot_be_removed_is_reported_not_swallowed() {
+    let sb = Sandbox::new();
+    sb.run_with("/x", |env| {
+        let mut log = Vec::new();
+        // Other drop-ins in it: expected, silent.
+        let busy = sb.root.join("busy");
+        put(&busy.join("other.conf"), "x");
+        execute_step(env, &Step::RemoveDirIfEmpty(busy.clone()), &mut log).unwrap();
+        assert!(busy.exists() && log.is_empty());
+        // A file where a directory should be: a real error, logged.
+        let file = sb.root.join("file");
+        put(&file, "x");
+        execute_step(env, &Step::RemoveDirIfEmpty(file), &mut log).unwrap();
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert!(log[0].contains("couldn't remove the directory"), "{log:?}");
+    });
+}
+
+#[test]
+fn the_flattening_is_the_one_the_keeper_module_documents() {
+    assert_eq!(
+        crate::bisync_name::flatten(Path::new("/a/b/c")),
+        flat(Path::new("/a/b/c"))
+    );
 }

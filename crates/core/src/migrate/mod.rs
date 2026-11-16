@@ -23,13 +23,15 @@ mod readers;
 
 pub use readers::parse_kconfig;
 
+use crate::bisync_name::flatten as flat;
 use crate::config::{self, Config};
 use crate::identity::{COSMIC_DESKTOP_ID, SLUG};
 use crate::units;
 use rclone_ui_i18n::fl;
+use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// File in the new state directory that says the migration is done.
 pub const MARKER: &str = "migrated-v1";
@@ -49,6 +51,139 @@ const PANEL_FILES: [&str; 2] = ["plugins_wings", "plugins_center"];
 /// bisync's name for a file is limited by the file system.
 const FILE_NAME_MAX: usize = 255;
 
+/// Why a migration did not happen. Stable codes (see [`MigrateError::code`]) are what gets
+/// persisted and sent over D-Bus; [`MigrateError::label`] is the text for the current language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrateError {
+    /// Both old installs have offline folders and it isn't clear which is in use.
+    Ambiguous,
+    /// A new data or state directory is in the way, or a unit isn't ours.
+    Conflict,
+    /// A sync started by the old keeper is still running inside rclone.
+    SyncInFlight,
+    /// An offline folder is still mounted.
+    MountInUse,
+    /// Another process holds the migration lock and didn't finish in time.
+    LockTimeout,
+    /// An old install is present and not yet migrated: refused to set up offline folders.
+    OldInstallPresent,
+    /// The dev build never migrates.
+    DevBuild,
+    /// Anything else (a step failed).
+    Failed,
+}
+
+impl MigrateError {
+    /// The stable code.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            MigrateError::Ambiguous => "ambiguous",
+            MigrateError::Conflict => "conflict",
+            MigrateError::SyncInFlight => "sync-in-flight",
+            MigrateError::MountInUse => "mount-in-use",
+            MigrateError::LockTimeout => "lock-timeout",
+            MigrateError::OldInstallPresent => "old-install-present",
+            MigrateError::DevBuild => "dev-build",
+            MigrateError::Failed => "failed",
+        }
+    }
+
+    /// The error for a code from [`code`](Self::code); unknown codes are `Failed`.
+    #[must_use]
+    pub fn from_code(code: &str) -> MigrateError {
+        [
+            MigrateError::Ambiguous,
+            MigrateError::Conflict,
+            MigrateError::SyncInFlight,
+            MigrateError::MountInUse,
+            MigrateError::LockTimeout,
+            MigrateError::OldInstallPresent,
+            MigrateError::DevBuild,
+        ]
+        .into_iter()
+        .find(|e| e.code() == code.trim())
+        .unwrap_or(MigrateError::Failed)
+    }
+
+    /// Short text for the current language.
+    #[must_use]
+    pub fn label(self) -> String {
+        match self {
+            MigrateError::Ambiguous => fl!("migrate-label-ambiguous"),
+            MigrateError::Conflict => fl!("migrate-label-conflict"),
+            MigrateError::SyncInFlight => fl!("migrate-label-sync-in-flight"),
+            MigrateError::MountInUse => fl!("migrate-label-mount-in-use"),
+            MigrateError::LockTimeout => fl!("migrate-label-lock-timeout"),
+            MigrateError::OldInstallPresent => fl!("migrate-label-old-install-present"),
+            MigrateError::DevBuild => fl!("migrate-label-dev-build"),
+            MigrateError::Failed => fl!("migrate-label-failed"),
+        }
+    }
+}
+
+/// A failed migration: the code for programs, the message for people.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationFailure {
+    /// Why.
+    pub code: MigrateError,
+    /// What to tell the user (current language).
+    pub message: String,
+}
+
+impl MigrationFailure {
+    fn new(code: MigrateError, message: String) -> Self {
+        Self { code, message }
+    }
+}
+
+impl std::fmt::Display for MigrationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MigrationFailure {}
+
+impl From<String> for MigrationFailure {
+    fn from(message: String) -> Self {
+        Self::new(MigrateError::Failed, message)
+    }
+}
+
+/// Whether a migration is waiting, without touching anything. See [`pending`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationStatus {
+    /// Nothing to do (marker present, no old install, dev build).
+    NotNeeded,
+    /// An old install is waiting to be moved.
+    Pending,
+    /// The last attempt failed with this error; running it again retries.
+    Failed(MigrateError),
+}
+
+impl MigrationStatus {
+    /// `none`, `pending`, or the error's code: what the D-Bus `migration` field carries.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            MigrationStatus::NotNeeded => "none",
+            MigrationStatus::Pending => "pending",
+            MigrationStatus::Failed(e) => e.code(),
+        }
+    }
+
+    /// Finished text for the current language (empty when nothing is wrong).
+    #[must_use]
+    pub fn label(self) -> String {
+        match self {
+            MigrationStatus::NotNeeded => String::new(),
+            MigrationStatus::Pending => fl!("migrate-label-pending"),
+            MigrationStatus::Failed(e) => e.label(),
+        }
+    }
+}
+
 /// A `systemctl --user` runner: arguments in, standard output out (an error for a non-zero exit).
 pub type Systemctl<'a> = dyn Fn(&[&str]) -> Result<String, String> + 'a;
 
@@ -64,7 +199,21 @@ pub struct Env<'a> {
     pub systemctl: &'a Systemctl<'a>,
     /// The shared `rclone-shell-ext` binary the new units run (empty if it couldn't be found).
     pub exe: PathBuf,
+    /// How many rc jobs the old install's rclone still runs (`None`: it can't be reached,
+    /// e.g. the mount service is down, which means none).
+    pub unfinished_jobs: &'a dyn Fn(&Config) -> Option<usize>,
+    /// The text of `/proc/self/mountinfo`.
+    pub mountinfo: &'a dyn Fn() -> String,
+    /// Sleeps between polls (a no-op counter in tests).
+    pub sleep: &'a dyn Fn(Duration),
+    /// How long to wait for jobs and mounts to go away before giving up.
+    pub quiet_timeout: Duration,
+    /// Time between polls while waiting.
+    pub poll: Duration,
 }
+
+/// How long a process that lost the migration lock waits for the winner.
+const LOCK_WAIT: Duration = Duration::from_secs(60);
 
 impl Env<'_> {
     fn unit_dir(&self) -> PathBuf {
@@ -83,6 +232,20 @@ impl Env<'_> {
         self.new_state().join(MARKER)
     }
 
+    /// Sits beside both state directories, so it survives their renames.
+    fn journal_path(&self) -> PathBuf {
+        self.state_home.join(format!("{SLUG}-migrate-journal.json"))
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.state_home.join(format!("{SLUG}-migrate.lock"))
+    }
+
+    /// The code of the last failure, for [`pending`].
+    fn error_path(&self) -> PathBuf {
+        self.state_home.join(format!("{SLUG}-migrate-error"))
+    }
+
     fn sysctl(&self, args: &[&str]) -> Result<String, String> {
         (self.systemctl)(args)
     }
@@ -98,6 +261,13 @@ pub enum Origin {
 }
 
 impl Origin {
+    fn code(self) -> &'static str {
+        match self {
+            Origin::Cosmic => "cosmic",
+            Origin::Plasma => "plasma",
+        }
+    }
+
     fn slug(self) -> &'static str {
         match self {
             Origin::Cosmic => OLD_COSMIC_SLUG,
@@ -178,6 +348,34 @@ struct Facts {
     new_state_empty: bool,
     /// COSMIC panel config files that list the old applet, with their text.
     panels: Vec<(PathBuf, String)>,
+    /// What an earlier, interrupted run recorded before it changed anything.
+    journal: Option<Journal>,
+}
+
+/// What the old install looked like before the first change, written before it (next to the
+/// state directories, so it survives their renames). A resumed run takes these facts from here,
+/// not from systemd, which by then shows the half-migrated state. Only codes and flags.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // independent facts, not a state machine
+struct Journal {
+    /// `cosmic` or `plasma`.
+    source: String,
+    keeper_was_enabled: bool,
+    keeper_was_active: bool,
+    /// Offline folders were switched on (so the new keeper must end up enabled).
+    offline_enabled: bool,
+    /// The old install had unit files (so new ones are written).
+    had_units: bool,
+    /// Ids of the pin units that were running.
+    pins: Vec<String>,
+}
+
+impl Journal {
+    fn origin(&self) -> Option<Origin> {
+        [Origin::Cosmic, Origin::Plasma]
+            .into_iter()
+            .find(|o| o.code() == self.source)
+    }
 }
 
 fn is_empty_dir(p: &Path) -> bool {
@@ -186,13 +384,6 @@ fn is_empty_dir(p: &Path) -> bool {
 
 fn read_opt(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
-}
-
-/// bisync's name for a path: no leading slash, separators flattened.
-fn flat(p: &Path) -> String {
-    p.to_string_lossy()
-        .trim_start_matches('/')
-        .replace('/', "_")
 }
 
 /// A path without its leading slash, for joining under another directory.
@@ -335,6 +526,7 @@ fn gather(env: &Env) -> Result<Facts, String> {
         // The marker's own directory counts as empty for this purpose only before it is written.
         new_state_empty: is_empty_dir(&state),
         panels,
+        journal: read_opt(&env.journal_path()).and_then(|t| serde_json::from_str(&t).ok()),
     })
 }
 
@@ -347,6 +539,14 @@ pub enum Step {
         args: Vec<String>,
         /// Carry on if it fails.
         best_effort: bool,
+    },
+    /// Wait until rclone has no unfinished jobs and no offline folder is mounted; if that
+    /// doesn't happen in time the old keeper is put back and the migration stops.
+    WaitQuiet {
+        /// The old install's settings (where its rclone listens, where the Drive is mounted).
+        cfg: Box<Config>,
+        /// The old data directory (an offline folder's mount has it as its source).
+        old_data: PathBuf,
     },
     /// Rename a file or directory (nothing to do if it is already gone and `to` exists).
     Rename {
@@ -366,6 +566,11 @@ pub enum Step {
     Remove(PathBuf),
     /// Remove a directory if it is empty.
     RemoveDirIfEmpty(PathBuf),
+    /// Enable the new keeper, and start it if the mount service (`service`) is running.
+    EnableKeeper {
+        /// The mount's systemd unit.
+        service: String,
+    },
 }
 
 impl Step {
@@ -388,6 +593,8 @@ impl std::fmt::Display for Step {
                     f.write_str(&fl!("migrate-step-systemctl", args = args))
                 }
             }
+            Step::WaitQuiet { .. } => f.write_str(&fl!("migrate-step-wait-quiet")),
+            Step::EnableKeeper { .. } => f.write_str(&fl!("migrate-step-enable-keeper")),
             Step::Rename { from, to } => f.write_str(&fl!(
                 "migrate-step-rename",
                 from = from.display().to_string(),
@@ -419,6 +626,9 @@ pub struct Plan {
     pub steps: Vec<Step>,
     /// The marker already exists: nothing to do.
     pub done: bool,
+    /// The journal to use; `journal_new` says it must be written before the first step.
+    journal: Option<Journal>,
+    journal_new: bool,
 }
 
 impl std::fmt::Display for Plan {
@@ -440,12 +650,20 @@ impl std::fmt::Display for Plan {
     }
 }
 
-/// The old install to migrate, and the ones to leave alone.
-fn choose(old: &[OldFacts]) -> Result<Option<(&OldFacts, Vec<&OldFacts>)>, String> {
-    let pick: Option<&OldFacts> = match old {
-        [] => None,
-        [one] => Some(one),
-        many => {
+/// The old install to migrate, and the ones to leave alone. An interrupted run's journal says
+/// which one it was.
+fn choose<'a>(
+    old: &'a [OldFacts],
+    journal: Option<&Journal>,
+) -> Result<Option<(&'a OldFacts, Vec<&'a OldFacts>)>, MigrationFailure> {
+    let from_journal = journal
+        .and_then(Journal::origin)
+        .and_then(|o| old.iter().find(|f| f.origin == o));
+    let pick: Option<&OldFacts> = match (from_journal, old) {
+        (Some(j), _) => Some(j),
+        (None, []) => None,
+        (None, [one]) => Some(one),
+        (None, many) => {
             let with_offline: Vec<&OldFacts> = many.iter().filter(|o| o.has_offline()).collect();
             match with_offline.as_slice() {
                 [] => many.iter().max_by_key(|o| o.config_mtime),
@@ -458,7 +676,12 @@ fn choose(old: &[OldFacts]) -> Result<Option<(&OldFacts, Vec<&OldFacts>)>, Strin
                         .collect();
                     match enabled.as_slice() {
                         [one] => Some(*one),
-                        _ => return Err(fl!("migrate-error-ambiguous")),
+                        _ => {
+                            return Err(MigrationFailure::new(
+                                MigrateError::Ambiguous,
+                                fl!("migrate-error-ambiguous"),
+                            ))
+                        }
                     }
                 }
             }
@@ -467,12 +690,15 @@ fn choose(old: &[OldFacts]) -> Result<Option<(&OldFacts, Vec<&OldFacts>)>, Strin
     Ok(pick.map(|p| (p, old.iter().filter(|o| o.origin != p.origin).collect())))
 }
 
-fn conflict(what: &Path) -> String {
-    fl!("migrate-error-conflict", path = what.display().to_string())
+fn conflict(what: &Path) -> MigrationFailure {
+    MigrationFailure::new(
+        MigrateError::Conflict,
+        fl!("migrate-error-conflict", path = what.display().to_string()),
+    )
 }
 
 /// Work out what to do. Pure: it only looks at `facts`.
-fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, String> {
+fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, MigrationFailure> {
     if facts.marker {
         return Ok(Plan {
             done: true,
@@ -481,7 +707,7 @@ fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, String> {
     }
     let mut plan = Plan::default();
     let mut steps = Vec::new();
-    if let Some((old, others)) = choose(&facts.old)? {
+    if let Some((old, others)) = choose(&facts.old, facts.journal.as_ref())? {
         plan.source = Some(old.origin);
         for other in others {
             plan.notes.push(fl!(
@@ -489,7 +715,23 @@ fn build_plan(env: &Env, facts: &Facts) -> Result<Plan, String> {
                 origin = other.origin.label()
             ));
         }
-        old_install_steps(env, facts, old, &mut plan, &mut steps)?;
+        let journal = facts.journal.clone().unwrap_or_else(|| Journal {
+            source: old.origin.code().into(),
+            keeper_was_enabled: old.keeper_enabled,
+            keeper_was_active: old.keeper_active,
+            offline_enabled: old.config.as_ref().is_some_and(|c| c.offline_enabled)
+                || old.keeper_enabled,
+            had_units: old.has_units(),
+            pins: old
+                .active_pins
+                .iter()
+                .filter_map(|u| u.split_once("-pin@"))
+                .map(|(_, id)| id.trim_end_matches(".service").to_string())
+                .collect(),
+        });
+        plan.journal_new = facts.journal.is_none();
+        old_install_steps(env, facts, old, &journal, &mut plan, &mut steps)?;
+        plan.journal = Some(journal);
     }
     // Panel entries are renamed whichever install was chosen: the old applet id is gone.
     for (path, text) in &facts.panels {
@@ -514,9 +756,10 @@ fn old_install_steps(
     env: &Env,
     facts: &Facts,
     old: &OldFacts,
+    journal: &Journal,
     plan: &mut Plan,
     steps: &mut Vec<Step>,
-) -> Result<(), String> {
+) -> Result<(), MigrationFailure> {
     let origin = old.origin;
     let unit_dir = env.unit_dir();
     let old_data = env.data_home.join(origin.slug());
@@ -536,15 +779,19 @@ fn old_install_steps(
     ] {
         if let Some(text) = text {
             if !text.starts_with(&format!("# Written by {}", origin.slug())) {
-                return Err(fl!(
-                    "migrate-error-unit-not-ours",
-                    path = unit_dir.join(unit).display().to_string()
+                return Err(MigrationFailure::new(
+                    MigrateError::Conflict,
+                    fl!(
+                        "migrate-error-unit-not-ours",
+                        path = unit_dir.join(unit).display().to_string()
+                    ),
                 ));
             }
         }
     }
-    if old.has_units() && env.exe.as_os_str().is_empty() {
-        return Err(fl!("migrate-error-no-exe"));
+    let units_wanted = old.has_units() || journal.had_units;
+    if units_wanted && env.exe.as_os_str().is_empty() {
+        return Err(fl!("migrate-error-no-exe").into());
     }
     let (old_flat, new_flat) = (
         format!("{}_", flat(&old_data.join("offline"))),
@@ -558,26 +805,34 @@ fn old_install_steps(
         .collect();
     for (_, new_name) in &listing_moves {
         if new_name.len() > FILE_NAME_MAX {
-            return Err(fl!("migrate-error-name-too-long", name = new_name.as_str()));
+            return Err(fl!("migrate-error-name-too-long", name = new_name.as_str()).into());
         }
         if old.bisync_files.contains(new_name) && old.state_dir {
-            return Err(fl!(
-                "migrate-error-listing-exists",
-                name = new_name.as_str()
-            ));
+            return Err(fl!("migrate-error-listing-exists", name = new_name.as_str()).into());
         }
     }
 
     // 1. Stop the old services so nothing writes while things move (the keeper first, or it
-    // would start the pin mounts again).
-    if old.keeper_active {
-        steps.push(Step::sysctl(&["stop", &origin.keeper_unit()], false));
+    // would start the pin mounts again). Unconditional: a keeper that is "activating" or about
+    // to be restarted by systemd is not "active" but must stop too.
+    if old.keeper_unit.is_some() {
+        let keeper = origin.keeper_unit();
+        steps.push(Step::sysctl(&["stop", &keeper], false));
+        steps.push(Step::sysctl(&["disable", &keeper], true));
+        steps.push(Step::sysctl(&["reset-failed", &keeper], true));
     }
-    for pin in &old.active_pins {
-        steps.push(Step::sysctl(&["stop", pin], false));
+    if old.pin_template.is_some() {
+        let pins = format!("{}-pin@*.service", origin.slug());
+        steps.push(Step::sysctl(&["stop", &pins], false));
+        steps.push(Step::sysctl(&["reset-failed", &pins], true));
     }
-    if old.keeper_enabled {
-        steps.push(Step::sysctl(&["disable", &origin.keeper_unit()], true));
+    // 1b. The keeper's bisync is an async job inside the mount's rclone, which stopping the
+    // unit doesn't stop; and pin mounts can outlive their unit for a moment.
+    if old.data_dir || old.state_dir {
+        steps.push(Step::WaitQuiet {
+            cfg: Box::new(old.config.clone().unwrap_or_default()),
+            old_data: old_data.clone(),
+        });
     }
 
     // 2. Move the data and state, then the baseline files whose names contain the data path.
@@ -622,8 +877,9 @@ fn old_install_steps(
         plan.notes.push(fl!("migrate-note-old-config-left"));
     }
 
-    // 4. The units: new ones in, old ones out.
-    if old.has_units() {
+    // 4. The units: new ones in, old ones out. Written every time (same content), so a run
+    // that resumes after the old ones are gone still ends with the new ones in place.
+    if units_wanted {
         let cfg = old.config.clone().unwrap_or_default();
         let exe = env.exe.to_string_lossy();
         steps.push(Step::Write {
@@ -638,8 +894,12 @@ fn old_install_steps(
             path: units::dropin_path_in(&unit_dir, &cfg.service),
             content: units::dropin(),
         });
-        steps.push(Step::Remove(unit_dir.join(origin.keeper_unit())));
-        steps.push(Step::Remove(unit_dir.join(origin.pin_template())));
+        if old.keeper_unit.is_some() {
+            steps.push(Step::Remove(unit_dir.join(origin.keeper_unit())));
+        }
+        if old.pin_template.is_some() {
+            steps.push(Step::Remove(unit_dir.join(origin.pin_template())));
+        }
         if let Some(d) = &old.dropin {
             steps.push(Step::Remove(d.clone()));
             if let Some(dir) = d.parent() {
@@ -647,15 +907,12 @@ fn old_install_steps(
             }
         }
         steps.push(Step::sysctl(&["daemon-reload"], false));
-        if old.keeper_enabled {
-            let mut args = vec!["enable"];
-            if old.keeper_active {
-                args.push("--now");
-            }
-            let name = units::keeper_unit_name();
-            args.push(&name);
-            steps.push(Step::sysctl(&args, false));
-        } else if old.keeper_active {
+        // From the journal, not from systemd now: a resumed run sees the half-moved state.
+        if journal.offline_enabled {
+            steps.push(Step::EnableKeeper {
+                service: cfg.service.clone(),
+            });
+        } else if journal.keeper_was_active {
             steps.push(Step::sysctl(&["start", &units::keeper_unit_name()], false));
         }
     }
@@ -666,20 +923,116 @@ fn old_install_steps(
 /// questions that don't change anything).
 ///
 /// # Errors
-/// A message if the old install is in a state the migration won't touch.
-pub fn plan(env: &Env) -> Result<Plan, String> {
+/// A failure if the old install is in a state the migration won't touch.
+pub fn plan(env: &Env) -> Result<Plan, MigrationFailure> {
     build_plan(env, &gather(env)?)
 }
 
+/// The octal escapes (`\040` for a space) `/proc/self/mountinfo` uses in paths.
+fn unescape_octal(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\'
+            && i + 3 < b.len()
+            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+        {
+            let v = (u32::from(b[i + 1] - b'0') << 6)
+                | (u32::from(b[i + 2] - b'0') << 3)
+                | u32::from(b[i + 3] - b'0');
+            out.push(u8::try_from(v & 0xff).unwrap_or(b'?'));
+            i += 4;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Is a FUSE mount still sitting on the old offline data: one whose source is under `old_data`
+/// or one mounted somewhere inside the Drive mount (`mount_path`), which is where pins go?
+fn offline_mount_left(mountinfo: &str, old_data: &Path, mount_path: &str) -> Option<String> {
+    let old_data = old_data.to_string_lossy();
+    let drive = mount_path.trim_end_matches('/');
+    mountinfo.lines().find_map(|l| {
+        let (left, right) = l.split_once(" - ")?;
+        let mountpoint = unescape_octal(left.split_whitespace().nth(4)?);
+        let mut r = right.split_whitespace();
+        let (fstype, source) = (r.next()?, unescape_octal(r.next()?));
+        let ours = fstype.starts_with("fuse")
+            && (source.contains(old_data.as_ref())
+                || (!drive.is_empty() && mountpoint.starts_with(&format!("{drive}/"))));
+        ours.then_some(mountpoint)
+    })
+}
+
+/// Wait for rclone's jobs and the pin mounts to be gone.
+fn wait_quiet(env: &Env, cfg: &Config, old_data: &Path) -> Result<(), MigrationFailure> {
+    let mount_path = config::expand(&cfg.mount_path);
+    let tries = (env.quiet_timeout.as_millis() / env.poll.as_millis().max(1)).max(1);
+    let (mut jobs, mut mount) = (0, None);
+    for i in 0..tries {
+        jobs = (env.unfinished_jobs)(cfg).unwrap_or(0);
+        mount = offline_mount_left(&(env.mountinfo)(), old_data, &mount_path);
+        if jobs == 0 && mount.is_none() {
+            return Ok(());
+        }
+        if i + 1 < tries {
+            (env.sleep)(env.poll);
+        }
+    }
+    Err(if jobs > 0 {
+        MigrationFailure::new(
+            MigrateError::SyncInFlight,
+            fl!("migrate-error-sync-in-flight", count = jobs),
+        )
+    } else {
+        MigrationFailure::new(
+            MigrateError::MountInUse,
+            fl!(
+                "migrate-error-mount-in-use",
+                path = mount.unwrap_or_default()
+            ),
+        )
+    })
+}
+
+/// Put the old keeper back the way the journal says it was (before any rename, after a failed
+/// [`wait_quiet`]). The keeper brings the pin mounts back itself.
+fn restore_old_keeper(env: &Env, origin: Origin, journal: &Journal, log: &mut Vec<String>) {
+    let keeper = origin.keeper_unit();
+    let mut run = |args: &[&str]| {
+        if let Err(e) = env.sysctl(args) {
+            log.push(fl!("migrate-log-ignored", error = e));
+        }
+    };
+    if journal.keeper_was_enabled {
+        run(&["enable", &keeper]);
+    }
+    if journal.keeper_was_active {
+        run(&["start", &keeper]);
+    }
+}
+
 /// Carry out one step.
-fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), String> {
+fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), MigrationFailure> {
     match step {
         Step::Systemctl { args, best_effort } => {
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             match env.sysctl(&refs) {
-                Err(e) if !best_effort => return Err(e),
+                Err(e) if !best_effort => return Err(e.into()),
                 Err(e) => log.push(fl!("migrate-log-ignored", error = e)),
                 Ok(_) => {}
+            }
+        }
+        Step::WaitQuiet { cfg, old_data } => wait_quiet(env, cfg, old_data)?,
+        Step::EnableKeeper { service } => {
+            let keeper = units::keeper_unit_name();
+            env.sysctl(&["enable", &keeper])?;
+            if env.sysctl(&["is-active", service]).is_ok() {
+                env.sysctl(&["start", &keeper])?;
             }
         }
         Step::Rename { from, to } => match std::fs::rename(from, to) {
@@ -693,7 +1046,7 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Str
                     path = from.display().to_string()
                 ));
             }
-            Err(e) => return Err(format!("{} -> {}: {e}", from.display(), to.display())),
+            Err(e) => return Err(format!("{} -> {}: {e}", from.display(), to.display()).into()),
         },
         Step::Write { path, content } => {
             config::write_atomic(path, content).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -701,11 +1054,26 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Str
         Step::Remove(p) => match std::fs::remove_file(p) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("{}: {e}", p.display())),
+            Err(e) => return Err(format!("{}: {e}", p.display()).into()),
         },
-        Step::RemoveDirIfEmpty(p) => {
-            let _ = std::fs::remove_dir(p);
-        }
+        Step::RemoveDirIfEmpty(p) => match std::fs::remove_dir(p) {
+            Ok(()) => {}
+            // Other drop-ins in it, or already gone: expected.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(e) => {
+                let line = fl!(
+                    "migrate-log-dir-kept",
+                    path = p.display().to_string(),
+                    error = e.to_string()
+                );
+                eprintln!("{line}");
+                log.push(line);
+            }
+        },
     }
     Ok(())
 }
@@ -713,26 +1081,56 @@ fn execute_step(env: &Env, step: &Step, log: &mut Vec<String>) -> Result<(), Str
 /// Plan and execute the migration. Returns the lines to show the user.
 ///
 /// # Errors
-/// A message if the plan couldn't be made (nothing was changed) or a step failed (running it
+/// A failure if the plan couldn't be made (nothing was changed) or a step failed (running it
 /// again resumes where it stopped).
-pub fn run(env: &Env) -> Result<Vec<String>, String> {
+pub fn run(env: &Env) -> Result<Vec<String>, MigrationFailure> {
+    run_limited(env, None)
+}
+
+/// [`run`], stopping with an error after `limit` steps (tests interrupt it this way).
+fn run_limited(env: &Env, limit: Option<usize>) -> Result<Vec<String>, MigrationFailure> {
     let plan = plan(env)?;
     if plan.done {
+        // A run that died between the marker and the cleanup.
+        let _ = std::fs::remove_file(env.journal_path());
         return Ok(vec![]);
+    }
+    // Before the first change: what the old install was like, for a run that resumes.
+    if let (Some(j), true) = (&plan.journal, plan.journal_new) {
+        let text = serde_json::to_string_pretty(j).map_err(|e| e.to_string())?;
+        config::write_atomic(&env.journal_path(), &text)
+            .map_err(|e| format!("{}: {e}", env.journal_path().display()))?;
     }
     let mut log = Vec::new();
     for (i, step) in plan.steps.iter().enumerate() {
+        if limit.is_some_and(|l| i >= l) {
+            return Err(String::from("interrupted").into());
+        }
         let number: usize = i + 1;
-        execute_step(env, step, &mut log).map_err(|e: String| {
-            fl!(
-                "migrate-error-step-failed",
-                number = number,
-                total = plan.steps.len(),
-                step = step.to_string(),
-                error = e
-            )
-        })?;
+        if let Err(e) = execute_step(env, step, &mut log) {
+            if let (Step::WaitQuiet { .. }, Some(o), Some(j)) =
+                (step, plan.source, plan.journal.as_ref())
+            {
+                // Nothing has moved yet: put the old keeper back and forget the journal, so a
+                // later attempt starts from what is then true.
+                restore_old_keeper(env, o, j, &mut log);
+                let _ = std::fs::remove_file(env.journal_path());
+                return Err(e);
+            }
+            return Err(MigrationFailure::new(
+                e.code,
+                fl!(
+                    "migrate-error-step-failed",
+                    number = number,
+                    total = plan.steps.len(),
+                    step = step.to_string(),
+                    error = e.message
+                ),
+            ));
+        }
     }
+    let _ = std::fs::remove_file(env.journal_path());
+    let _ = std::fs::remove_file(env.error_path());
     let line = |text: &str| fl!("migrate-line", text = text);
     let mut out = vec![line(&plan.source.map_or_else(
         || fl!("migrate-done-nothing"),
@@ -743,10 +1141,137 @@ pub fn run(env: &Env) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+// ---- the lock, and who may migrate when ----
+
+/// Holds the lock file until dropped.
+#[derive(Debug)]
+struct LockGuard(PathBuf);
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Take the lock, or wait (up to `wait`) for whoever has it to finish. `Ok(None)` means the
+/// marker appeared meanwhile: nothing left to do.
+fn acquire_wait(env: &Env, wait: Duration) -> Result<Option<LockGuard>, MigrationFailure> {
+    let lock = env.lock_path();
+    let tries = (wait.as_millis() / env.poll.as_millis().max(1)).max(1);
+    for _ in 0..tries {
+        if env.marker().exists() {
+            return Ok(None);
+        }
+        if acquire(&lock) {
+            return Ok(Some(LockGuard(lock)));
+        }
+        (env.sleep)(env.poll);
+    }
+    if env.marker().exists() {
+        return Ok(None);
+    }
+    Err(MigrationFailure::new(
+        MigrateError::LockTimeout,
+        fl!("migrate-error-lock-timeout"),
+    ))
+}
+
+/// [`run`] under the lock. A process that finds the lock taken waits for the other to finish
+/// and re-checks the marker. The reason for a failure is kept for [`pending`].
+fn run_locked(env: &Env, wait: Duration) -> Result<Vec<String>, MigrationFailure> {
+    let Some(_guard) = acquire_wait(env, wait)? else {
+        return Ok(vec![]);
+    };
+    let result = run(env);
+    match &result {
+        Ok(_) => {
+            let _ = std::fs::remove_file(env.error_path());
+        }
+        Err(e) => {
+            let _ = config::write_atomic(&env.error_path(), e.code.code());
+        }
+    }
+    result
+}
+
+/// Is an old install here that hasn't been migrated? Looks at files only.
+fn old_install_present(config_home: &Path, data_home: &Path, state_home: &Path) -> bool {
+    let units = units::unit_dir_in(config_home);
+    config_home.join(OLD_PLASMA_CONFIG).exists()
+        || config_home.join("cosmic").join(OLD_COSMIC_APP_ID).exists()
+        || [OLD_COSMIC_SLUG, OLD_PLASMA_SLUG].iter().any(|s| {
+            data_home.join(s).exists()
+                || state_home.join(s).exists()
+                || units.join(format!("{s}-offline.service")).exists()
+                || units.join(format!("{s}-pin@.service")).exists()
+        })
+}
+
+/// [`pending`] for explicit roots.
+#[must_use]
+pub fn pending_in(config_home: &Path, data_home: &Path, state_home: &Path) -> MigrationStatus {
+    if state_home.join(SLUG).join(MARKER).exists()
+        || !old_install_present(config_home, data_home, state_home)
+    {
+        return MigrationStatus::NotNeeded;
+    }
+    match read_opt(&state_home.join(format!("{SLUG}-migrate-error"))) {
+        Some(code) => MigrationStatus::Failed(MigrateError::from_code(&code)),
+        None => MigrationStatus::Pending,
+    }
+}
+
 fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
     std::env::var_os(var)
         .filter(|v| !v.is_empty())
         .map_or_else(|| PathBuf::from(config::expand(fallback)), PathBuf::from)
+}
+
+fn skip() -> bool {
+    cfg!(test)
+        || std::env::var_os(SKIP_ENV).is_some()
+        || crate::identity::try_identity().is_none_or(crate::identity::Identity::is_dev)
+}
+
+/// Does an old install still wait to be migrated? Cheap (a few `stat`s) and changes nothing:
+/// front ends call it from places that must not block (D-Bus activation, the applet's start-up).
+#[must_use]
+pub fn pending() -> MigrationStatus {
+    if skip() {
+        return MigrationStatus::NotNeeded;
+    }
+    pending_in(
+        &config::xdg_config_home(),
+        &xdg_dir("XDG_DATA_HOME", "~/.local/share"),
+        &xdg_dir("XDG_STATE_HOME", "~/.local/state"),
+    )
+}
+
+/// Refuse to switch offline folders on or pin anything while an old install is waiting to be
+/// moved: the new keeper and the old one would fight over the same folders.
+///
+/// # Errors
+/// [`MigrateError::OldInstallPresent`] with an explanation.
+pub fn guard() -> Result<(), MigrationFailure> {
+    guard_status(pending())
+}
+
+fn guard_status(status: MigrationStatus) -> Result<(), MigrationFailure> {
+    match status {
+        MigrationStatus::NotNeeded => Ok(()),
+        _ => Err(MigrationFailure::new(
+            MigrateError::OldInstallPresent,
+            fl!("migrate-error-old-install-present"),
+        )),
+    }
+}
+
+/// [`crate::keeper::set_pinned`] behind [`guard`] (pinning only; unpinning is always allowed).
+pub fn set_pinned_guarded(path: &str, pinned: bool) -> Result<String, String> {
+    if pinned {
+        guard().map_err(|e| e.message)?;
+    }
+    crate::keeper::set_pinned(path, pinned)
 }
 
 /// Run `f` with an [`Env`] built from this process: the real XDG directories and the real
@@ -768,38 +1293,100 @@ fn with_process_env<T>(f: impl FnOnce(&Env) -> T) -> T {
             ))
         }
     };
+    let jobs = crate::rc::unfinished_jobs;
+    let mountinfo = || std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
     let env = Env {
         config_home: config::xdg_config_home(),
         data_home: xdg_dir("XDG_DATA_HOME", "~/.local/share"),
         state_home: xdg_dir("XDG_STATE_HOME", "~/.local/state"),
         systemctl: &runner,
         exe: units::shared_exe().unwrap_or_default(),
+        unfinished_jobs: &jobs,
+        mountinfo: &mountinfo,
+        sleep: &std::thread::sleep,
+        quiet_timeout: Duration::from_secs(120),
+        poll: Duration::from_secs(2),
     };
     f(&env)
 }
 
-/// Every binary calls this first thing. Cheap (one `stat`) once the marker exists, does nothing
-/// for the dev build and in tests, and reports problems on stderr without stopping the program.
-pub fn run_if_needed() {
-    if cfg!(test) || std::env::var_os(SKIP_ENV).is_some() || crate::identity::identity().is_dev() {
-        return;
+/// Migrate now if an old install is waiting, in the foreground, printing what happened on
+/// stderr. For the command-line modes: the caller exits non-zero on `Err`. Does nothing for the
+/// dev build and in tests. Waits (up to a minute) if another process is migrating.
+///
+/// # Errors
+/// Why the migration failed (already printed).
+pub fn run_if_needed() -> Result<(), MigrationFailure> {
+    if skip() || (pending() == MigrationStatus::NotNeeded && !xdg_state_marker_missing()) {
+        return Ok(());
     }
-    let marker = xdg_dir("XDG_STATE_HOME", "~/.local/state")
+    match with_process_env(|env| run_locked(env, LOCK_WAIT)) {
+        Ok(lines) => {
+            for l in &lines {
+                eprintln!("{l}");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{}", fl!("migrate-failed", error = e.message.as_str()));
+            Err(e)
+        }
+    }
+}
+
+/// With no old install the marker is still written once (so later starts are one `stat`).
+fn xdg_state_marker_missing() -> bool {
+    !xdg_dir("XDG_STATE_HOME", "~/.local/state")
         .join(SLUG)
-        .join(MARKER);
-    if marker.exists() {
-        return;
+        .join(MARKER)
+        .exists()
+}
+
+/// Start the migration on a background thread, if one is needed. For processes that must not
+/// block on it (the Plasma daemon after it owns its bus name, the COSMIC applet): they show
+/// [`pending`] meanwhile. Errors are printed on stderr and kept for [`pending`].
+pub fn spawn_background() -> Option<std::thread::JoinHandle<()>> {
+    if pending() == MigrationStatus::NotNeeded {
+        return None;
     }
-    // Two binaries starting together (applet and daemon) must not both migrate.
-    let lock = xdg_dir("XDG_STATE_HOME", "~/.local/state").join(format!("{SLUG}-migrate.lock"));
-    if !acquire(&lock) {
-        return;
+    Some(std::thread::spawn(|| {
+        let _ = run_if_needed();
+    }))
+}
+
+/// `--migrate [--dry-run]`: print the plan, or carry it out. Returns the text to show.
+///
+/// # Errors
+/// The failure to print on stderr (exit code 1).
+pub fn command(dry_run: bool) -> Result<String, MigrationFailure> {
+    refuse_dev(crate::identity::identity().is_dev())?;
+    with_process_env(|env| {
+        if dry_run {
+            plan(env).map(|p| p.to_string())
+        } else {
+            let plan = plan(env)?;
+            if plan.done {
+                return Ok(plan.to_string());
+            }
+            let mut text = String::new();
+            for line in run_locked(env, LOCK_WAIT)? {
+                let _ = writeln!(text, "{line}");
+            }
+            Ok(text.trim_end().to_string())
+        }
+    })
+}
+
+/// The dev build keeps its own state and must never move the real install's.
+fn refuse_dev(is_dev: bool) -> Result<(), MigrationFailure> {
+    if is_dev {
+        Err(MigrationFailure::new(
+            MigrateError::DevBuild,
+            fl!("migrate-error-dev-build"),
+        ))
+    } else {
+        Ok(())
     }
-    match with_process_env(run) {
-        Ok(lines) => lines.iter().for_each(|l| eprintln!("{l}")),
-        Err(e) => eprintln!("{}", fl!("migrate-failed", error = e)),
-    }
-    let _ = std::fs::remove_file(&lock);
 }
 
 /// Take the lock file. One nobody has touched for ten minutes belongs to a process that died.
@@ -826,28 +1413,6 @@ fn acquire(lock: &Path) -> bool {
         let _ = std::fs::remove_file(lock);
         create()
     }
-}
-
-/// `--migrate [--dry-run]`: print the plan, or carry it out. Returns the text to show.
-///
-/// # Errors
-/// The message to print on stderr (exit code 1).
-pub fn command(dry_run: bool) -> Result<String, String> {
-    with_process_env(|env| {
-        if dry_run {
-            plan(env).map(|p| p.to_string())
-        } else {
-            let plan = plan(env)?;
-            if plan.done {
-                return Ok(plan.to_string());
-            }
-            let mut text = String::new();
-            for line in run(env)? {
-                let _ = writeln!(text, "{line}");
-            }
-            Ok(text.trim_end().to_string())
-        }
-    })
 }
 
 #[cfg(test)]
