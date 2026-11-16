@@ -45,7 +45,7 @@ fn run_qml(file: &str, display_name: &str) -> i32 {
     app.as_mut()
         .set_organization_name(&QString::from("ca-peterson"));
     app.as_mut()
-        .set_application_name(&QString::from("rclone-shell-ext"));
+        .set_application_name(&QString::from(rclone_ui_core::identity::identity().slug));
     app.as_mut()
         .set_application_display_name(&QString::from(display_name));
     // Plasma matches the window to its launcher (and takes the `com.ca-peterson.rclone-shell-ext` icon) through
