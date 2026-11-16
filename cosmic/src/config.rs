@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! COSMIC side of the settings: the plain [`Config`] and its shared `config.toml` store live in
+//! `rclone-ui-core`; here are the conveniences the UI code uses, and the change watch.
+
+pub use rclone_ui_core::config::Config;
+use rclone_ui_core::config::{store, TomlStore};
+use std::time::{Duration, SystemTime};
+
+/// How often the windows and the applet look at the settings file for changes made elsewhere
+/// (the Plasma front end, `--pin`, a text editor).
+pub const WATCH_EVERY: Duration = Duration::from_secs(2);
+
+/// `Config::load()` / `Config::save(..)` for the UI code, through the shared store.
+pub trait ConfigExt: Sized {
+    /// Load the user's saved settings, falling back to defaults for anything unreadable.
+    fn load() -> Self;
+    /// Change the saved settings: `f` edits a fresh copy, which is written back. Running
+    /// windows pick the change up through their [`ConfigWatch`].
+    fn save(f: impl FnOnce(&mut Config)) -> Result<Config, String>;
+}
+
+impl ConfigExt for Config {
+    fn load() -> Self {
+        store().load()
+    }
+
+    fn save(f: impl FnOnce(&mut Config)) -> Result<Config, String> {
+        let mut f = Some(f);
+        store().save(&mut |c| {
+            if let Some(f) = f.take() {
+                f(c);
+            }
+        })
+    }
+}
+
+/// Notices when `config.toml` changes (its modification time moves) so a window can reload.
+/// Create it when the window loads its config, so a change between that load and the first
+/// poll is not missed.
+#[derive(Debug)]
+pub struct ConfigWatch {
+    file: TomlStore,
+    seen: Option<SystemTime>,
+}
+
+impl Default for ConfigWatch {
+    /// Records the file's time now.
+    fn default() -> Self {
+        let file = TomlStore::new(TomlStore::default_path());
+        let seen = file.mtime();
+        Self { file, seen }
+    }
+}
+
+impl ConfigWatch {
+    /// The settings if the file changed since the last poll.
+    pub fn poll(&mut self) -> Option<Config> {
+        let now = self.file.changed_since(self.seen)?;
+        self.seen = now;
+        Some(store().load())
+    }
+}

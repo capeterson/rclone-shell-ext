@@ -1,0 +1,30 @@
+[package]
+name = "rclone-ui-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Toolkit-free rclone status, offline-folder and setup logic shared by the rclone UI front ends"
+
+[lib]
+name = "rclone_ui_core"
+
+[dependencies]
+base64 = "0.22"
+jiff.workspace = true
+mime_guess = "2"
+rclone-ui-i18n.workspace = true
+ron = "0.12"
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.5"
+ureq = { version = "2", features = ["json"] }
+xdg-mime = "0.4"
+
+[features]
+# Makes `identity()` fall back to the release identity instead of panicking, for the unit tests
+# of crates that use core functions which name units and directories (enable it from
+# `[dev-dependencies]` only).
+test-identity = []
+
+[lints]
+workspace = true

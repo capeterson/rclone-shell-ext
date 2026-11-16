@@ -1,0 +1,150 @@
+name := 'rclone-shell-ext-plasma'
+# The shared binary: the keeper and pin units run it, and both front ends install it.
+shared := 'rclone-shell-ext'
+# The D-Bus service name (and the plasmoid id); the settings launcher is `desktopid`.
+appid := 'com.ca-peterson.rclone-shell-ext'
+desktopid := 'com.ca-peterson.rclone-shell-ext.Plasma'
+plasmoid := 'plasmoid/com.ca-peterson.rclone-shell-ext'
+# What earlier releases were called (uninstall cleans these up too).
+oldname := 'rclone-plasma'
+oldappid := 'com.ca-peterson.RclonePlasma'
+oldplasmoid := 'com.ca-peterson.rcloneplasma'
+prefix := env_var('HOME') / '.local'
+plugindir := prefix / 'lib64/qt6/plugins'
+# Recipes run in plasma/; the workspace target dir is one level up.
+target := '../target'
+dolphin_build := target / 'dolphin'
+icon := 'com.ca-peterson.rclone-shell-ext'
+icons := prefix / 'share/icons/hicolor/scalable'
+
+default: build-release
+
+build-release:
+    cargo build --release -p {{name}} -p {{name}}-ui -p {{shared}}
+    cmake -B {{dolphin_build}} -S dolphin -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={{prefix}} -DKDE_INSTALL_PLUGINDIR={{plugindir}}
+    cmake --build {{dolphin_build}}
+
+test:
+    cargo test -p {{name}} -p {{name}}-ui --locked
+
+# Everything CI runs
+ci:
+    cargo clippy -p {{name}} -p {{name}}-ui --all-targets --locked -- -D warnings
+    cargo test -p {{name}} -p {{name}}-ui --locked
+    cmake -B {{dolphin_build}} -S dolphin && cmake --build {{dolphin_build}}
+    just --justfile {{source_directory()}}/../justfile plasma::lint-qml
+
+# qmllint over the Kirigami windows and the plasmoid. Syntax errors and real type errors fail;
+# imports that do not resolve (Kirigami, org.kde.plasma.*, our cxx-qt module, absent on CI) and
+# the warnings that cascade from them do not.
+lint-qml:
+    $(command -v qmllint-qt6 || command -v qmllint || echo /usr/lib64/qt6/bin/qmllint) \
+        --import disable --unqualified disable --compiler disable --unresolved-type disable \
+        --missing-type disable --missing-property disable --unresolved-alias disable \
+        --incompatible-type disable \
+        ui/qml/*.qml plasmoid/*/contents/ui/*.qml plasmoid/*/contents/config/config.qml
+
+# Install the SVGs from the repo's resources/ (the only copy) under their theme names:
+# status icons `rclone-shell-ext-<state>`, Dolphin emblems `rclone-shell-ext-emblem-<state>`.
+install-icons:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for s in stopped unmounted unreachable full error uploading downloading transferring synced loading; do
+        install -Dm0644 ../resources/emblems/$s.svg {{icons}}/status/rclone-shell-ext-$s.svg
+    done
+    for s in downloading offline online partial synced uploading; do
+        install -Dm0644 ../resources/overlay/$s.svg {{icons}}/emblems/rclone-shell-ext-emblem-$s.svg
+    done
+    install -Dm0644 ../resources/icons/hicolor/scalable/apps/{{icon}}.svg {{icons}}/apps/{{icon}}.svg
+    touch {{prefix}}/share/icons/hicolor || true
+
+# Install under ~/.local. Dolphin finds the plugins through QT_PLUGIN_PATH, which a Plasma env
+# script sets from the next login (start Dolphin with it set to test before then).
+install-user: build-release
+    install -Dm0755 {{target}}/release/{{name}} {{prefix}}/bin/{{name}}
+    install -Dm0755 {{target}}/release/{{shared}} {{prefix}}/bin/{{shared}}
+    # Move an old rclone-plasma / cosmic-rclone-ui install over, in the foreground: a failure
+    # stops the recipe with the reason and leaves every old file in place (the old plasmoid and
+    # daemon keep working).
+    {{prefix}}/bin/{{shared}} --migrate
+    sed 's|@BINDIR@|{{prefix}}/bin|' dbus/{{appid}}.service | install -Dm0644 /dev/stdin {{prefix}}/share/dbus-1/services/{{appid}}.service
+    -busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig
+    just --justfile {{source_directory()}}/../justfile plasma::install-icons
+    printf '[Desktop Entry]\nName=rclone UI\nExec={{name}} --settings\nIcon={{icon}}\nType=Application\nNoDisplay=true\n' | install -Dm0644 /dev/stdin {{prefix}}/share/applications/{{desktopid}}.desktop
+    kpackagetool6 -t Plasma/Applet -u {{plasmoid}} >/dev/null 2>&1 || kpackagetool6 -t Plasma/Applet -i {{plasmoid}}
+    cmake --install {{dolphin_build}}
+    just --justfile {{source_directory()}}/../justfile plasma::reload-plasmashell
+    printf 'export QT_PLUGIN_PATH="{{plugindir}}${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"\n' | install -Dm0644 /dev/stdin ~/.config/plasma-workspace/env/{{name}}.sh
+    # Restart a running daemon so it picks up the new binary (D-Bus starts it again on demand).
+    -pkill -x -f '{{prefix}}/bin/{{name}} --daemon'
+    -pkill -x -f '{{prefix}}/bin/{{oldname}} --daemon'
+    # The migration succeeded (the recipe would have stopped): take the old install's files away.
+    # The old binary stays while old units (an install the migration did not pick) still call it.
+    -kpackagetool6 -t Plasma/Applet -r {{oldplasmoid}}
+    rm -f {{prefix}}/share/dbus-1/services/{{oldappid}}.service ~/.config/plasma-workspace/env/{{oldname}}.sh {{prefix}}/share/applications/{{oldappid}}.desktop
+    if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f {{prefix}}/bin/{{oldname}}; fi
+
+# plasmashell only loads a plasmoid's code, and the panel entry, when it starts, and it writes
+# its in-memory layout over plasma-org.kde.plasma.desktop-appletsrc whenever it likes. So the
+# old plasmoid id in that file is renamed only while plasmashell is stopped: stop it, run
+# `--plasma-panel-rename`, start it again (always, even if the rename fails). Nothing happens
+# unless the file names our plasmoid and plasmashell is running. Dolphin is left running (its
+# plugins load at its next start).
+reload-plasmashell:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=~/.config/plasma-org.kde.plasma.desktop-appletsrc
+    pat='={{appid}}\(,\|$\)\|,{{appid}}\(,\|$\)\|={{oldplasmoid}}\(,\|$\)\|,{{oldplasmoid}}\(,\|$\)'
+    status=0
+    if grep -qs "$pat" "$rc" && pgrep -u "$(id -u)" -x plasmashell >/dev/null; then
+        use_systemd=false
+        if systemctl --user cat plasma-plasmashell.service >/dev/null 2>&1; then use_systemd=true; fi
+        start_shell() {
+            if $use_systemd; then systemctl --user start plasma-plasmashell.service || true
+            else (kstart plasmashell >/dev/null 2>&1 &) || true; fi
+        }
+        trap start_shell EXIT
+        if $use_systemd; then systemctl --user stop plasma-plasmashell.service || true
+        else kquitapp6 plasmashell || true; fi
+        for _ in $(seq 1 100); do
+            pgrep -u "$(id -u)" -x plasmashell >/dev/null || break
+            sleep 0.1
+        done
+        if pgrep -u "$(id -u)" -x plasmashell >/dev/null; then
+            echo "plasmashell did not stop; panel entry not renamed." >&2
+            status=1
+        else
+            {{prefix}}/bin/{{shared}} --plasma-panel-rename || status=1
+        fi
+    fi
+    echo "Restart Dolphin to load the new plugins (start it with QT_PLUGIN_PATH set until your next login)."
+    exit $status
+
+# Removes this version's files and the ones earlier versions (rclone-plasma) installed. The
+# offline-folder units, drop-in and `offline_enabled` are shared with the COSMIC front end, so
+# they and the shared binary only go when COSMIC is not installed. `--offline-remove` runs first:
+# if it refuses (folders are still kept offline) nothing has been touched yet.
+uninstall-user:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The pre-rename install: only if it was never migrated (a migration already removed its units,
+    # and its old config still lists pins, so its --offline-remove would refuse forever). Runs first:
+    # it is the step that can refuse, and nothing has been removed yet.
+    marker="${XDG_STATE_HOME:-$HOME/.local/state}/rclone-shell-ext/migrated-v1"
+    if [ ! -e "$marker" ] && [ -x {{prefix}}/bin/{{oldname}} ]; then
+        {{prefix}}/bin/{{oldname}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    cosmic_present=false
+    if [ -e {{prefix}}/bin/rclone-shell-ext-cosmic ]; then cosmic_present=true; fi
+    if [ "$cosmic_present" = false ] && [ -x {{prefix}}/bin/{{shared}} ]; then
+        {{prefix}}/bin/{{shared}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    pkill -x -f '{{prefix}}/bin/{{name}} --daemon' || true
+    pkill -x -f '{{prefix}}/bin/{{oldname}} --daemon' || true
+    kpackagetool6 -t Plasma/Applet -r {{appid}} || true
+    kpackagetool6 -t Plasma/Applet -r {{oldplasmoid}} || true
+    rm -f {{prefix}}/bin/{{name}} {{prefix}}/share/dbus-1/services/{{appid}}.service {{prefix}}/share/applications/{{desktopid}}.desktop ~/.config/plasma-workspace/env/{{name}}.sh
+    if [ "$cosmic_present" = false ]; then rm -f {{prefix}}/bin/{{shared}}; fi
+    rm -f {{prefix}}/bin/{{oldname}} {{prefix}}/share/dbus-1/services/{{oldappid}}.service {{prefix}}/share/applications/{{oldappid}}.desktop ~/.config/plasma-workspace/env/{{oldname}}.sh
+    rm -f {{plugindir}}/kf6/overlayicon/rcloneoverlayplugin.so {{plugindir}}/kf6/kfileitemaction/rclonefileitemaction.so
+    find {{prefix}}/share/icons/hicolor \( -name 'rclone-shell-ext-*' -o -name '{{icon}}.svg' -o -name 'rclone-plasma*' \) -delete

@@ -1,0 +1,86 @@
+name := 'rclone-shell-ext-cosmic'
+# The shared binary: the keeper and pin units run it, and both front ends install it.
+shared := 'rclone-shell-ext'
+appid := 'com.ca-peterson.rclone-shell-ext.Cosmic'
+# What earlier releases were called (uninstall cleans these up too).
+oldname := 'cosmic-rclone-ui'
+oldappid := 'com.ca-peterson.CosmicRcloneUi'
+# Recipes run in this directory; the workspace target dir is one level up.
+target := '../target'
+# The one copy of the SVGs lives at the repo root.
+icon := 'com.ca-peterson.rclone-shell-ext-symbolic'
+old_icon := 'com.ca-peterson.CosmicRcloneUi-symbolic'
+
+default: build-release
+
+build-release:
+    cargo build --release -p {{name}} -p {{shared}}
+
+check:
+    cargo clippy --all-targets -p {{name}} --locked -- -D warnings
+
+test:
+    cargo test -p {{name}} --locked
+
+# Everything CI runs for the COSMIC app
+ci:
+    cargo clippy --all-targets -p {{name}} --locked -- -D warnings
+    cargo test -p {{name}} --locked
+
+# Print one status snapshot without the panel
+status:
+    cargo run --release -p {{shared}} -- --status
+
+# Install under ~/.local so the applet can be added in COSMIC panel settings
+install-user: build-release
+    install -Dm0755 {{target}}/release/{{name}} ~/.local/bin/{{name}}
+    install -Dm0755 {{target}}/release/{{shared}} ~/.local/bin/{{shared}}
+    install -Dm0644 resources/{{appid}}.desktop ~/.local/share/applications/{{appid}}.desktop
+    install -Dm0644 ../resources/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg
+    # Move an old cosmic-rclone-ui / rclone-plasma install over, in the foreground: a failure
+    # stops the recipe with the reason and leaves every old file in place.
+    ~/.local/bin/{{shared}} --migrate
+    # Only now that it worked: the old applet's files. The old binary stays while old units
+    # (an install the migration did not pick) still call it.
+    rm -f ~/.local/share/applications/{{oldappid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{old_icon}}.svg
+    if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f ~/.local/bin/{{oldname}}; fi
+
+# Removes this version's files and the ones earlier versions (cosmic-rclone-ui) installed. The
+# offline-folder units, drop-in and `offline_enabled` are shared with the Plasma front end, so
+# they and the shared binary only go when Plasma is not installed. `--offline-remove` runs first:
+# if it refuses (folders are still kept offline) nothing has been touched yet.
+uninstall-user:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The pre-rename install: only if it was never migrated (a migration already removed its units,
+    # and its old config still lists pins, so its --offline-remove would refuse forever). Runs first:
+    # it is the step that can refuse, and nothing has been removed yet.
+    marker="${XDG_STATE_HOME:-$HOME/.local/state}/rclone-shell-ext/migrated-v1"
+    if [ ! -e "$marker" ] && [ -x ~/.local/bin/{{oldname}} ]; then
+        ~/.local/bin/{{oldname}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    plasma_present=false
+    if [ -e ~/.local/bin/rclone-shell-ext-plasma ]; then plasma_present=true; fi
+    if [ "$plasma_present" = false ] && [ -x ~/.local/bin/{{shared}} ]; then
+        ~/.local/bin/{{shared}} --offline-remove || { echo "uninstall aborted: nothing was removed (see above)." >&2; exit 1; }
+    fi
+    rm -f ~/.local/bin/{{name}} ~/.local/share/applications/{{appid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{old_icon}}.svg
+    if [ "$plasma_present" = false ]; then rm -f ~/.local/bin/{{shared}}; fi
+    rm -f ~/.local/bin/{{oldname}} ~/.local/share/applications/{{oldappid}}.desktop
+
+devid := 'com.ca-peterson.rclone-shell-ext-dev'
+devdesktop := devid + '.Cosmic'
+
+# Install a side-by-side dev copy ("rclone UI (dev)") that doesn't touch the real applet
+install-dev:
+    APP_ID_OVERRIDE={{devid}} cargo build --release -p {{name}} -p {{shared}}
+    install -Dm0755 {{target}}/release/{{name}} ~/.local/bin/{{name}}-dev
+    install -Dm0755 {{target}}/release/{{shared}} ~/.local/bin/{{shared}}-dev
+    sed -e 's/^Name=.*/Name=rclone UI (dev)/' -e 's/^Exec=.*/Exec={{name}}-dev/' resources/{{appid}}.desktop > /tmp/{{devdesktop}}.desktop
+    install -Dm0644 /tmp/{{devdesktop}}.desktop ~/.local/share/applications/{{devdesktop}}.desktop
+    rm -f /tmp/{{devdesktop}}.desktop
+    cargo build --release -p {{name}} -p {{shared}}  # restore the normal build in target/
+
+uninstall-dev:
+    if [ -x ~/.local/bin/{{shared}}-dev ]; then ~/.local/bin/{{shared}}-dev --offline-remove; fi
+    rm -f ~/.local/bin/{{name}}-dev ~/.local/bin/{{shared}}-dev ~/.local/share/applications/{{devdesktop}}.desktop

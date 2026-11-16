@@ -1,0 +1,4 @@
+# Files that still hard-code user-visible text and have not been converted to message ids yet.
+# The literal check (rule 4 of "UI text" in docs/architecture.md) skips them. A path listed here
+# that no longer contains a violation fails the test, so this list can only shrink: delete a
+# line when you convert the file.

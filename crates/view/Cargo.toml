@@ -1,0 +1,21 @@
+[package]
+name = "rclone-ui-view"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Toolkit-free presentation model for the rclone UI front ends: what to show and which actions apply"
+
+[lib]
+name = "rclone_ui_view"
+
+[dependencies]
+jiff.workspace = true
+rclone-ui-core.workspace = true
+rclone-ui-i18n.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rclone-ui-core = { workspace = true, features = ["test-identity"] }
+
+[lints]
+workspace = true

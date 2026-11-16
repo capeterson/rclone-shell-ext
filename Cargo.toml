@@ -1,28 +1,31 @@
-[package]
-name = "cosmic-rclone-ui"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/i18n", "crates/view", "crates/cli", "cosmic", "plasma/daemon", "plasma/ui"]
+default-members = ["crates/core", "crates/i18n", "crates/view", "crates/cli"]
+
+[workspace.package]
 edition = "2021"
 license = "GPL-3.0-only"
-description = "COSMIC panel applet showing rclone mount and upload status"
+version = "0.1.0"
 
-[dependencies]
-base64 = "0.22"
+[workspace.dependencies]
+rclone-ui-core = { path = "crates/core" }
+rclone-shell-ext = { path = "crates/cli" }
+rclone-ui-i18n = { path = "crates/i18n" }
+rclone-ui-view = { path = "crates/view" }
 jiff = "0.2"
-mime_guess = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+zbus = "5"
 tokio = { version = "1", features = ["rt", "time"] }
-ureq = { version = "2", features = ["json"] }
-xdg-mime = "0.4"
 
-[dependencies.libcosmic]
-git = "https://github.com/pop-os/libcosmic"
-default-features = false
-features = ["applet", "dbus-config", "multi-window", "tokio", "wayland", "winit"]
-
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Byte counts and percentages are converted to f64/f32 purely for display.
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
+# Libraries expose their pub fns as the API, so these pedantic doc lints add noise.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"

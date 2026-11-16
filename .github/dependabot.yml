@@ -1,6 +1,20 @@
 version: 2
 updates:
+  # One workspace, one Cargo.lock.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # A git dependency pinned by Cargo.lock; updated by hand.
+      - dependency-name: libcosmic
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

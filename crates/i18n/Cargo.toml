@@ -1,0 +1,21 @@
+[package]
+name = "rclone-ui-i18n"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "The shared UI text for the rclone shell extension: Fluent files, loader and fl! macro"
+
+[lib]
+name = "rclone_ui_i18n"
+
+[dependencies]
+fluent-syntax = "0.12"
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = { version = "8", features = ["debug-embed"] }
+
+[dev-dependencies]
+regex = "1"
+
+[lints]
+workspace = true
