@@ -3,12 +3,6 @@
 
 #include <KFileItem>
 #include <KFileItemListProperties>
-#ifdef RCLONE_NO_KI18N
-#include <QCoreApplication>
-#define i18n(s) QCoreApplication::translate("rclone-shell-ext", s)
-#else
-#include <KLocalizedString>
-#endif
 #include <KPluginFactory>
 
 #include <QAction>
@@ -84,11 +78,11 @@ QList<QAction *> RcloneFileItemAction::actions(const KFileItemListProperties &fi
         paths << path;
     }
 
-    auto *menuAction = new QAction(QIcon::fromTheme(QStringLiteral("com.ca-peterson.rclone-shell-ext")), i18n("rclone"), parentWidget);
+    auto *menuAction = new QAction(QIcon::fromTheme(QStringLiteral("com.ca-peterson.rclone-shell-ext")), m_client->text("dolphin-menu"), parentWidget);
     auto *menu = new QMenu(parentWidget);
     menuAction->setMenu(menu);
 
-    QAction *details = menu->addAction(QIcon::fromTheme(QStringLiteral("document-properties")), i18n("Details…"));
+    QAction *details = menu->addAction(QIcon::fromTheme(QStringLiteral("document-properties")), m_client->text("dolphin-details"));
     connect(details, &QAction::triggered, this, [paths]() {
         launch(QStringList{QStringLiteral("--menu")} + paths);
     });
@@ -104,19 +98,19 @@ QList<QAction *> RcloneFileItemAction::actions(const KFileItemListProperties &fi
             const bool pinsKnown = !json.isEmpty();
             const bool pinned = pinsKnown && parsePins(json).contains(rel);
             if (!pinsKnown || !pinned) {
-                QAction *pin = menu->addAction(QIcon::fromTheme(QStringLiteral("emblem-favorite")), i18n("Keep offline"));
+                QAction *pin = menu->addAction(QIcon::fromTheme(QStringLiteral("emblem-favorite")), m_client->text("details-keep-offline"));
                 connect(pin, &QAction::triggered, this, [path]() {
                     launch({QStringLiteral("--pin"), path});
                 });
             }
             if (!pinsKnown || pinned) {
-                QAction *unpin = menu->addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Stop keeping offline"));
+                QAction *unpin = menu->addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), m_client->text("dolphin-stop-keeping-offline"));
                 connect(unpin, &QAction::triggered, this, [path]() {
                     launch({QStringLiteral("--unpin"), path});
                 });
             }
         }
-        QAction *share = menu->addAction(QIcon::fromTheme(QStringLiteral("emblem-shared")), i18n("Manage Sharing"));
+        QAction *share = menu->addAction(QIcon::fromTheme(QStringLiteral("emblem-shared")), m_client->text("details-manage-sharing"));
         connect(share, &QAction::triggered, this, [path]() {
             launch({QStringLiteral("--share-open"), path});
         });

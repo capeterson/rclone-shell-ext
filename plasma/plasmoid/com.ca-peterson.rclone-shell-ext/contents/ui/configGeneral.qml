@@ -18,6 +18,24 @@ KCM.SimpleKCM {
     property string saveError: ""
     property bool loaded: false
 
+    // The daemon's UI text (id -> wording). A config page can open before the daemon runs; the
+    // Strings() call starts it. Until it answers an id shows as itself.
+    property var s: withFallback({})
+
+    function withFallback(table) {
+        return new Proxy(table, {
+            get: function (target, id) {
+                return target[id] !== undefined ? target[id] : String(id);
+            }
+        });
+    }
+
+    function loadStrings() {
+        bus("Strings", [], function (table) {
+            if (table !== null && typeof table === "object") page.s = withFallback(table);
+        });
+    }
+
     function bus(member, args, ok, fail) {
         DBus.SessionBus.asyncCall({
             service: "com.ca-peterson.rclone-shell-ext",
@@ -47,10 +65,10 @@ KCM.SimpleKCM {
                 page.loaded = true;
                 page.loadError = "";
             } catch (e) {
-                page.loadError = i18n("Could not read the configuration: %1", e);
+                page.loadError = page.s["plasma-config-read-failed"];
             }
         }, function (err) {
-            page.loadError = i18n("rclone UI service not running");
+            page.loadError = page.s["panel-service-missing"];
         });
     }
 
@@ -76,11 +94,14 @@ KCM.SimpleKCM {
                 for (const k in changed) page.original[k] = changed[k];
             }
         }, function (err) {
-            page.saveError = i18n("rclone UI service not running");
+            page.saveError = page.s["panel-service-missing"];
         });
     }
 
-    Component.onCompleted: load()
+    Component.onCompleted: {
+        loadStrings();
+        load();
+    }
 
     Kirigami.FormLayout {
         Kirigami.InlineMessage {
@@ -90,7 +111,7 @@ KCM.SimpleKCM {
             type: Kirigami.MessageType.Error
             text: page.loadError
             actions: Kirigami.Action {
-                text: i18n("Retry")
+                text: page.s["plasma-config-retry"]
                 icon.name: "view-refresh"
                 onTriggered: page.load()
             }
@@ -104,37 +125,37 @@ KCM.SimpleKCM {
 
         QQC2.TextField {
             id: rcAddr
-            Kirigami.FormData.label: i18n("rclone RC address:")
+            Kirigami.FormData.label: page.s["plasma-config-rc-addr"]
             enabled: page.loaded
             Layout.fillWidth: true
         }
         QQC2.TextField {
             id: envFile
-            Kirigami.FormData.label: i18n("Environment file:")
+            Kirigami.FormData.label: page.s["plasma-config-env-file"]
             enabled: page.loaded
             Layout.fillWidth: true
         }
         QQC2.TextField {
             id: service
-            Kirigami.FormData.label: i18n("systemd service:")
+            Kirigami.FormData.label: page.s["plasma-config-service"]
             enabled: page.loaded
             Layout.fillWidth: true
         }
         QQC2.TextField {
             id: mountPath
-            Kirigami.FormData.label: i18n("Mount path:")
+            Kirigami.FormData.label: page.s["plasma-config-mount-path"]
             enabled: page.loaded
             Layout.fillWidth: true
         }
         QQC2.TextField {
             id: cacheDir
-            Kirigami.FormData.label: i18n("Cache directory:")
+            Kirigami.FormData.label: page.s["plasma-config-cache-dir"]
             enabled: page.loaded
             Layout.fillWidth: true
         }
         QQC2.SpinBox {
             id: interval
-            Kirigami.FormData.label: i18n("Sync interval (seconds):")
+            Kirigami.FormData.label: page.s["plasma-config-sync-interval"]
             enabled: page.loaded
             from: 0
             to: 86400
@@ -145,8 +166,8 @@ KCM.SimpleKCM {
 
         QQC2.CheckBox {
             id: showAllBox
-            Kirigami.FormData.label: i18n("Popup:")
-            text: i18n("Show the full history list when opened")
+            Kirigami.FormData.label: page.s["plasma-config-popup"]
+            text: page.s["plasma-config-show-all"]
         }
     }
 }

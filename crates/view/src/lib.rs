@@ -4,6 +4,7 @@
 
 pub mod details;
 pub mod history;
+pub mod panel;
 pub mod settings;
 
 use rclone_ui_i18n::fl;
