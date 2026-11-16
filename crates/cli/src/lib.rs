@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The command-line modes every front end shares: the offline-folder keeper and pin units the
-//! systemd services run, `--pins`, `--status`, `--share-url` and `--migrate`. The
+//! systemd services run, `--pins`, `--status`, `--share-url` and `--migrate` and `--plasma-panel-rename`. The
 //! `rclone-shell-ext` binary is a thin wrapper around [`run`]; the front-end binaries call
 //! [`run`] too for flags that aren't theirs, so there is exactly one implementation.
 
 use rclone_ui_core::config::store;
+use rclone_ui_core::migrate::plasma_panel;
 use rclone_ui_core::{keeper, migrate, pin, rc, share, units};
 use rclone_ui_i18n::fl;
 
@@ -69,6 +70,14 @@ pub fn run(args: &[String]) -> Option<i32> {
             migrate::command(has(args, "--dry-run")).map_err(|e| e.message),
         ));
     }
+    if has(args, "--plasma-panel-rename") {
+        let path = rclone_ui_core::config::xdg_config_home().join(plasma_panel::APPLETSRC);
+        return Some(report(panel_rename(
+            &path,
+            has(args, "--dry-run"),
+            &plasma_panel::plasmashell_running,
+        )));
+    }
     if let Some(code) = offline_cli(args) {
         return Some(code);
     }
@@ -83,6 +92,24 @@ pub fn run(args: &[String]) -> Option<i32> {
         return Some(0);
     }
     None
+}
+
+/// `--plasma-panel-rename`: see [`plasma_panel::apply`]. `running` is injected for tests.
+fn panel_rename(
+    path: &std::path::Path,
+    dry_run: bool,
+    running: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    let shown = path.display().to_string();
+    match plasma_panel::apply(path, dry_run, running) {
+        Ok(plasma_panel::Outcome::Nothing(_)) => Ok(fl!("cli-panel-nothing", path = shown)),
+        Ok(plasma_panel::Outcome::Changed(_)) if dry_run => {
+            Ok(fl!("cli-panel-would-change", path = shown))
+        }
+        Ok(plasma_panel::Outcome::Changed(_)) => Ok(fl!("cli-panel-changed", path = shown)),
+        Err(None) => Err(fl!("cli-panel-running", path = shown)),
+        Err(Some(error)) => Err(fl!("cli-panel-failed", path = shown, error = error)),
+    }
 }
 
 fn share_cmd(path: &str, open: bool) -> i32 {
@@ -232,6 +259,30 @@ mod tests {
 
     fn a(v: &[&str]) -> Vec<String> {
         v.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn panel_rename_refuses_while_plasmashell_runs() {
+        rclone_ui_i18n::init();
+        let d = std::env::temp_dir().join(format!("rse-cli-panel-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join(plasma_panel::APPLETSRC);
+        std::fs::write(&f, "[A]\nplugin=com.ca-peterson.rcloneplasma\n").unwrap();
+        let err = panel_rename(&f, false, &|| true).unwrap_err();
+        assert!(err.contains("plasmashell is running"), "{err}");
+        assert!(std::fs::read_to_string(&f)
+            .unwrap()
+            .contains("rcloneplasma"));
+        assert!(panel_rename(&f, true, &|| true)
+            .unwrap()
+            .starts_with("Would rename"));
+        assert!(panel_rename(&f, false, &|| false)
+            .unwrap()
+            .starts_with("Renamed"));
+        assert!(panel_rename(&f, false, &|| true)
+            .unwrap()
+            .starts_with("No old"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

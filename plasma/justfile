@@ -84,21 +84,41 @@ install-user: build-release
     rm -f {{prefix}}/share/dbus-1/services/{{oldappid}}.service ~/.config/plasma-workspace/env/{{oldname}}.sh {{prefix}}/share/applications/{{oldappid}}.desktop
     if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f {{prefix}}/bin/{{oldname}}; fi
 
-# plasmashell only loads a plasmoid's code, and the panel entry `--migrate` renamed in
-# plasma-org.kde.plasma.desktop-appletsrc, when it starts: restart it if our plasmoid is on a
-# panel or in the tray. Dolphin is left running (its plugins load at its next start).
+# plasmashell only loads a plasmoid's code, and the panel entry, when it starts, and it writes
+# its in-memory layout over plasma-org.kde.plasma.desktop-appletsrc whenever it likes. So the
+# old plasmoid id in that file is renamed only while plasmashell is stopped: stop it, run
+# `--plasma-panel-rename`, start it again (always, even if the rename fails). Nothing happens
+# unless the file names our plasmoid and plasmashell is running. Dolphin is left running (its
+# plugins load at its next start).
 reload-plasmashell:
     #!/usr/bin/env bash
-    set -euo pipefail
-    if grep -qs '={{appid}}\(,\|$\)\|,{{appid}}\(,\|$\)' ~/.config/plasma-org.kde.plasma.desktop-appletsrc; then
-        if systemctl --user cat plasma-plasmashell.service >/dev/null 2>&1; then
-            systemctl --user restart plasma-plasmashell.service || true
+    set -uo pipefail
+    rc=~/.config/plasma-org.kde.plasma.desktop-appletsrc
+    pat='={{appid}}\(,\|$\)\|,{{appid}}\(,\|$\)\|={{oldplasmoid}}\(,\|$\)\|,{{oldplasmoid}}\(,\|$\)'
+    status=0
+    if grep -qs "$pat" "$rc" && pgrep -u "$(id -u)" -x plasmashell >/dev/null; then
+        use_systemd=false
+        if systemctl --user cat plasma-plasmashell.service >/dev/null 2>&1; then use_systemd=true; fi
+        start_shell() {
+            if $use_systemd; then systemctl --user start plasma-plasmashell.service || true
+            else (kstart plasmashell >/dev/null 2>&1 &) || true; fi
+        }
+        trap start_shell EXIT
+        if $use_systemd; then systemctl --user stop plasma-plasmashell.service || true
+        else kquitapp6 plasmashell || true; fi
+        for _ in $(seq 1 100); do
+            pgrep -u "$(id -u)" -x plasmashell >/dev/null || break
+            sleep 0.1
+        done
+        if pgrep -u "$(id -u)" -x plasmashell >/dev/null; then
+            echo "plasmashell did not stop; panel entry not renamed." >&2
+            status=1
         else
-            kquitapp6 plasmashell || true
-            kstart plasmashell || true
+            {{prefix}}/bin/{{shared}} --plasma-panel-rename || status=1
         fi
     fi
     echo "Restart Dolphin to load the new plugins (start it with QT_PLUGIN_PATH set until your next login)."
+    exit $status
 
 # Removes this version's files and the ones earlier versions (rclone-plasma) installed. The
 # offline-folder units, drop-in and `offline_enabled` are shared with the COSMIC front end, so

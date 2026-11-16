@@ -1343,7 +1343,7 @@ fn the_flattening_is_the_one_the_keeper_module_documents() {
     );
 }
 
-// ---- failures are remembered, the Plasma panel entry ----
+// ---- failures are remembered ----
 
 #[test]
 fn a_plan_that_cannot_be_made_is_remembered_for_pending() {
@@ -1359,94 +1359,4 @@ fn a_plan_that_cannot_be_made_is_remembered_for_pending() {
         pending_in(&sb.config(), &sb.data(), &sb.state()),
         MigrationStatus::Failed(MigrateError::Ambiguous)
     );
-}
-
-/// The shape of a real `plasma-org.kde.plasma.desktop-appletsrc`: the plasmoid on a panel and in
-/// the system tray, listed in the tray's `extraItems` / `knownItems`.
-const APPLETSRC: &str = "\
-[Containments][2][Applets][32]
-immutability=1
-plugin=com.ca-peterson.rcloneplasma
-
-[Containments][2][Applets][32][Configuration]
-popupHeight=400
-
-[Containments][2][Applets][7][Applets][28]
-immutability=1
-plugin=org.kde.plasma.mediacontroller
-
-[Containments][2][Applets][7][Applets][35]
-immutability=1
-plugin=com.ca-peterson.rcloneplasma
-
-[Containments][2][Applets][7][Configuration][General]
-extraItems=org.kde.kdeconnect,org.kde.plasma.volume,com.ca-peterson.rcloneplasma
-knownItems=org.kde.kdeconnect,com.ca-peterson.rcloneplasma,org.kde.plasma.volume
-note=com.ca-peterson.rcloneplasmaX,xcom.ca-peterson.rcloneplasma
-";
-
-#[test]
-fn the_plasma_panel_entry_is_renamed_by_exact_token_only() {
-    let out = rename_plasmoid_id(APPLETSRC);
-    assert_eq!(
-        out.matches("com.ca-peterson.rclone-shell-ext").count(),
-        4,
-        "{out}"
-    );
-    assert!(out.contains("plugin=com.ca-peterson.rclone-shell-ext\n"));
-    assert!(out.contains(
-        "extraItems=org.kde.kdeconnect,org.kde.plasma.volume,com.ca-peterson.rclone-shell-ext\n"
-    ));
-    assert!(out.contains(
-        "knownItems=org.kde.kdeconnect,com.ca-peterson.rclone-shell-ext,org.kde.plasma.volume\n"
-    ));
-    // Near misses and other plugins are untouched; so is everything else, byte for byte.
-    assert!(out.contains("note=com.ca-peterson.rcloneplasmaX,xcom.ca-peterson.rcloneplasma\n"));
-    assert!(out.contains("plugin=org.kde.plasma.mediacontroller\n"));
-    assert_eq!(out.replace("rclone-shell-ext", "rcloneplasma"), APPLETSRC);
-    assert_eq!(rename_plasmoid_id(&out), out, "idempotent");
-}
-
-#[test]
-fn the_migration_rewrites_the_plasma_panel_entry_and_keeps_the_file_private() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let sb = Sandbox::new();
-    let rc = sb.config().join(PLASMA_APPLETSRC);
-    put(&rc, APPLETSRC);
-    std::fs::set_permissions(&rc, std::fs::Permissions::from_mode(0o600)).unwrap();
-    // Even with no old install at all: the old plasmoid id is gone.
-    sb.migrate().unwrap();
-    let text = std::fs::read_to_string(&rc).unwrap();
-    assert!(
-        !text.contains("plugin=com.ca-peterson.rcloneplasma")
-            && text.contains("plugin=com.ca-peterson.rclone-shell-ext\n")
-    );
-    assert_eq!(
-        std::fs::metadata(&rc).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    // No stray temp files.
-    assert_eq!(
-        names(&sb.config())
-            .iter()
-            .filter(|n| n.contains(".tmp"))
-            .count(),
-        0
-    );
-}
-
-#[test]
-fn a_panel_entry_that_cannot_be_rewritten_is_a_warning_not_a_failure() {
-    let sb = Sandbox::new();
-    let mut log = Vec::new();
-    sb.run_with("/x", |env| {
-        execute_step(
-            env,
-            &Step::RenamePlasmoid(sb.config().join("missing-appletsrc")),
-            &mut log,
-        )
-    })
-    .unwrap();
-    assert_eq!(log.len(), 1);
-    assert!(log[0].contains("missing-appletsrc"), "{log:?}");
 }

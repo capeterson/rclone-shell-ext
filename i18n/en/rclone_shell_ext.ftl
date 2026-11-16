@@ -342,6 +342,7 @@ cli-usage =
       --offline-repair FOLDER | --offline-remove
       --offline-keeper | --pin-mount ID | --pin-unmount ID   (run by the systemd units)
       --migrate [--dry-run]    move an old cosmic-rclone-ui / rclone-plasma install over
+      --plasma-panel-rename [--dry-run]   rename the old plasmoid in the Plasma panel (plasmashell stopped)
 cli-usage-plasma =
     usage: rclone-shell-ext-plasma MODE
       --daemon                 run the D-Bus service
@@ -349,6 +350,11 @@ cli-usage-plasma =
       --menu PATH...           details window (also --details)
       --settings               settings window
     plus the shared modes of `rclone-shell-ext`:
+cli-panel-changed = Renamed the old rclone widget in { $path }
+cli-panel-would-change = Would rename the old rclone widget in { $path }
+cli-panel-nothing = No old rclone widget to rename in { $path }
+cli-panel-running = plasmashell is running and would overwrite { $path }; stop it first (the install recipe does).
+cli-panel-failed = couldn't update { $path }: { $error }
 cli-pin-keeping = Keeping { $folder } available offline
 cli-pin-stopped = No longer keeping { $folder } offline
 cli-repair-requested = Repair of { $folder } requested
@@ -409,7 +415,6 @@ migrate-error-dev-build = the dev build never migrates; use the installed rclone
 migrate-error-sync-unknown = rclone's job list couldn't be read (it answered with an error), so it isn't known whether a sync is still running, and nothing was moved. The old offline-folder service was put back; try again in a few minutes.
 migrate-error-step-restored = step { $number } of { $total } ({ $step }) failed: { $error }. Nothing was moved, and the old offline-folder service was put back.
 migrate-error-restore-failed = { $message } The old offline-folder service could not be fully put back ({ $errors }); run `systemctl --user enable --now` on it yourself.
-migrate-log-panel-kept = couldn't update the Plasma panel entry in { $path }: { $error }. Remove and add the rclone widget again if it is missing.
 migrate-log-dir-kept = couldn't remove the directory { $path }: { $error }
 migrate-label-pending = Moving your old offline-folder setup…
 migrate-label-ambiguous = The old COSMIC and Plasma installs both use offline folders; turn them off in one and try again
