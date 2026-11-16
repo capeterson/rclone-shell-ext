@@ -14,15 +14,15 @@ use rclone_ui_i18n::fl;
 pub fn headline(health: Option<Health>) -> String {
     match health {
         Some(Health::Healthy) => fl!("health-healthy"),
-        Some(Health::Uploading) => fl!("health-uploading"),
-        Some(Health::Downloading) => fl!("health-downloading"),
+        Some(Health::Uploading) => fl!("common-uploading"),
+        Some(Health::Downloading) => fl!("common-downloading"),
         Some(Health::Transferring) => fl!("health-transferring"),
         Some(Health::FileErrors) => fl!("health-file-errors"),
         Some(Health::CacheFull) => fl!("health-cache-full"),
         Some(Health::Unreachable) => fl!("health-unreachable"),
         Some(Health::NotMounted) => fl!("health-not-mounted"),
         Some(Health::ServiceStopped) => fl!("health-service-stopped"),
-        None => fl!("health-checking"),
+        None => fl!("common-checking"),
     }
 }
 

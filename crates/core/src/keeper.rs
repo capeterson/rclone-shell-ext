@@ -560,7 +560,7 @@ fn desktop_notify(text: &str) {
         .args([
             "--app-name=rclone UI",
             "--icon=folder-sync-symbolic",
-            &fl!("offline-notify-title"),
+            &fl!("offline-heading"),
             text,
         ])
         .spawn();

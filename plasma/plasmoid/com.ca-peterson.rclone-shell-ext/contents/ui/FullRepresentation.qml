@@ -150,7 +150,7 @@ PlasmaExtras.Representation {
                     level: 5
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.topMargin: Kirigami.Units.smallSpacing
-                    text: full.s["panel-offline-heading"]
+                    text: full.s["offline-heading"]
                 }
                 PlasmaComponents3.Label {
                     visible: full.offlineEnabled

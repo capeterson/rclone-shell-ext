@@ -20,10 +20,17 @@ common-ago-days = { $count ->
    *[other] { $count } days ago
 }
 
+common-open = Open
+common-repair = Repair
+common-remove = Remove
+common-cancel = Cancel
+common-checking = Checking…
+common-uploading = Uploading
+common-downloading = Downloading
+
 ## details-: the details window
 
 details-status-error = Error
-details-status-checking = Checking…
 details-status-cached-no-compare = Cached (can't compare with Drive)
 details-status-transferring = Transferring
 details-status-nothing-pending = Nothing pending
@@ -33,9 +40,7 @@ details-files-size = { $count } file(s), { $size }
 details-files-size-more = { $count }+ file(s), { $size }
 details-cached-partly = Partly ({ $have } of { $size })
 
-details-state-uploading = Uploading
 details-state-queued-upload = Queued for upload
-details-state-downloading = Downloading
 details-state-in-sync = In sync (cached)
 details-state-online-only = Online only (not cached)
 details-state-partly-cached = Partly downloaded
@@ -43,8 +48,6 @@ details-state-local-newer = Local changes pending
 details-state-drive-newer = Drive has a newer version
 details-state-differs = Differs from Drive
 
-details-row-uploading = Uploading
-details-row-downloading = Downloading
 details-row-offline-copy = Offline copy
 details-row-cached = Cached
 details-row-drive-modified = Drive modified
@@ -70,6 +73,17 @@ details-offline-needs-attention = Offline sync needs attention
 details-offline-syncing = Syncing offline copy
 details-offline-waiting = Waiting to sync offline copy
 
+details-window-title = rclone
+details-checking-sync-status = Checking sync status…
+details-heading-sync-status = Sync status
+details-heading-sharing = Sharing
+details-column-name = Name
+details-column-role = Role
+details-column-type = Type
+details-open-folder = Folder
+details-open-file = File
+details-stop-keeping-offline = Stop keeping offline
+
 ## settings-: the settings window
 
 settings-offline-description = Folders you choose are fully downloaded, kept in sync both ways, and work without a connection, right where they are in the Drive folder.
@@ -79,6 +93,21 @@ settings-setup-hint-busy = Enter your password if asked. The Drive mount restart
 settings-setup-hint-remaining = Runs the remaining steps above.
 settings-setup-hint-mount-down = The Drive mount isn't running; setup will start it.
 settings-pin-synced = { $label } · synced { $when }
+
+settings-window-title = rclone settings
+settings-heading-general = General
+settings-heading-activity = Recent offline activity
+settings-keep-offline-switch = Keep folders available offline
+cosmic-settings-context-menu = Show “rclone…” in the Files right-click menu
+settings-step-done = Done
+settings-step-todo = To do
+settings-setting-up = Setting up…
+settings-setup-incomplete = Setup isn't complete
+settings-setup-button = Set up
+settings-no-pins = No folders are kept offline yet
+cosmic-settings-no-pins-hint = In Files, right-click a folder in the Drive folder, choose “rclone…”, then “Keep offline”.
+settings-consent-title = Turn on offline folders?
+settings-consent-intro = Keeping folders offline needs these changes. Nothing has been changed yet.
 
 ## offline-: offline folders (phases, consent, setup steps, keeper messages)
 
@@ -169,8 +198,104 @@ offline-err-files-open = Files in the folder are still open
 offline-err-no-network = no network
 offline-err-delete-local = Couldn't delete the local copy: { $error }
 offline-err-cloud-lookup = Couldn't look up the cloud folder: { $error }
-offline-notify-title = Offline folders
+offline-heading = Offline folders
 offline-notify-conflicts-resolved = Resolved { $count } conflicting edits in { $folder }
+
+## health-: health headlines
+
+health-healthy = Healthy
+health-transferring = Uploading and downloading
+health-file-errors = Some files failed
+health-cache-full = Cache is full
+health-unreachable = Can't reach rclone
+health-not-mounted = Not mounted
+health-service-stopped = Service stopped
+health-uploading-files = Uploading: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+health-downloading-files = Downloading: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+health-transferring-files = Uploading and downloading: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+health-file-errors-files = Some files failed: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+
+## panel-, plasma-, dolphin-: the panel popup, the plasmoid config page, the Dolphin plugins
+
+panel-title = rclone UI
+panel-service-missing = rclone UI service not running
+panel-open-folder = Open folder
+panel-restart = Restart
+panel-start = Start
+panel-stop = Stop
+panel-settings = Settings
+panel-recent-heading = Recently synced
+panel-show-all = Show all ({ $count })
+panel-show-less = Show less
+panel-history-title = Sync history
+panel-history-summary = { $count ->
+    [one] Last file since rclone started · newest first
+   *[other] Last { $count } files since rclone started · newest first
+}
+panel-history-unavailable = History unavailable
+panel-history-empty = Nothing synced since rclone started
+panel-last-error = Last error: { $error }
+panel-failed = Failed: { $error }
+panel-out-of-space = The cache disk is out of space. Free some space so uploads can finish.
+panel-outdated-rclone = rclone { $version } is older than the { $minimum } this app needs. Update rclone, then restart the mount; some features may misbehave until you do.
+panel-detail-state = Mount: { $mounted ->
+    [yes] up
+   *[no] down
+}   Service: { $running ->
+    [yes] running
+   *[no] stopped
+}
+panel-detail-rc-unreachable = rc unreachable: { $error }
+panel-detail-rclone-version = rclone { $version }
+panel-detail-uploads = Uploads: { $active } in progress, { $queued } queued
+panel-detail-cache = Cache: { $files } files, { $size }
+panel-detail-errored = Errored files: { $count }
+panel-detail-errored-full = Errored files: { $count } (cache out of space)
+panel-transfer-line = { $name } — { $done } / { $total } at { $speed }
+panel-transfer-line-unknown-size = { $name } — { $done } / ? at { $speed }
+panel-speed = { $size }/s
+panel-more-transfers = …and { $count } more
+panel-caption-join = { $head } · { $tail }
+panel-times = ×{ $count }
+panel-kind-created = New file
+panel-kind-updated = Changed
+panel-kind-deleted = Deleted
+panel-tip-uploaded = Uploaded to the cloud
+panel-tip-downloaded = Downloaded from the cloud
+panel-tip-deleted-upload = Deleted here, so removed from the cloud
+panel-tip-deleted-download = Deleted in the cloud, so removed here
+panel-offline-setup = Offline folders: finish setup in Settings
+panel-offline-summary = Offline: { $summary }
+panel-pin-waiting = Waiting for the keeper
+plasma-config-retry = Retry
+plasma-config-read-failed = Could not read the configuration.
+plasma-config-rc-addr = rclone RC address:
+plasma-config-env-file = Environment file:
+plasma-config-service = systemd service:
+plasma-config-mount-path = Mount path:
+plasma-config-cache-dir = Cache directory:
+plasma-config-sync-interval = Sync interval (seconds):
+plasma-config-popup = Popup:
+plasma-config-show-all = Show the full history list when opened
+dolphin-menu = rclone
+dolphin-details = Details…
+plasma-settings-no-pins-hint = In Dolphin, right-click a folder in the Drive folder, choose “rclone”, then “Keep offline”.
+plasma-settings-dolphin-heading = Dolphin integration
+plasma-settings-dolphin-menu-switch = Show “rclone” in Dolphin's right-click menu
+plasma-settings-dolphin-status-title = Sync status in Dolphin
+plasma-settings-dolphin-status-detail = Dolphin's plugins show sync emblems on files in the Drive folder and add an “rclone” action for details, offline folders and sharing. They talk to the background service over D-Bus.
 
 ## share-, drive-: sharing and Drive metadata
 
@@ -275,185 +400,3 @@ migrate-label-lock-timeout = Another process is moving the old install
 migrate-label-old-install-present = The old install hasn't been moved over yet
 migrate-label-dev-build = The dev build doesn't move old installs
 migrate-label-failed = Moving the old install failed; run `rclone-shell-ext --migrate` for details
-
-## ---- Wave 3 work zones: each agent adds ids ONLY under its own zone (any prefix), so
-## ---- parallel branches merge cleanly. The zones are folded into the sections above afterwards.
-
-## zone: cosmic-details
-
-cosmic-details-title = rclone
-cosmic-details-loading = Checking sync status…
-cosmic-details-sync-heading = Sync status
-cosmic-details-sharing-heading = Sharing
-cosmic-details-col-name = Name
-cosmic-details-col-role = Role
-cosmic-details-col-type = Type
-cosmic-details-open = Open
-cosmic-details-open-folder = Folder
-cosmic-details-open-file = File
-
-## end zone: cosmic-details
-
-## zone: cosmic-settings
-cosmic-settings-window-title = rclone UI settings
-cosmic-settings-section-offline = Offline folders
-cosmic-settings-section-general = General
-cosmic-settings-section-activity = Recent offline activity
-cosmic-settings-offline-toggle = Keep folders available offline
-cosmic-settings-context-menu = Show “rclone…” in the Files right-click menu
-cosmic-settings-step-done = Done
-cosmic-settings-step-todo = To do
-cosmic-settings-setting-up = Setting up…
-cosmic-settings-setup-incomplete = Setup isn't complete
-cosmic-settings-setup-button = Set up
-cosmic-settings-no-pins = No folders are kept offline yet
-cosmic-settings-no-pins-hint = In Files, right-click a folder in the Drive folder, choose “rclone…”, then “Keep offline”.
-cosmic-settings-repair = Repair
-cosmic-settings-open = Open
-cosmic-settings-remove = Remove
-cosmic-settings-cancel = Cancel
-cosmic-settings-consent-title = Turn on offline folders?
-cosmic-settings-consent-body = Keeping folders offline needs these changes. Nothing has been changed yet.
-## end zone: cosmic-settings
-
-## zone: panel (health-, panel-, dolphin-, plasmoid)
-
-health-checking = Checking…
-health-healthy = Healthy
-health-uploading = Uploading
-health-downloading = Downloading
-health-transferring = Uploading and downloading
-health-file-errors = Some files failed
-health-cache-full = Cache is full
-health-unreachable = Can't reach rclone
-health-not-mounted = Not mounted
-health-service-stopped = Service stopped
-health-uploading-files = Uploading: { $count ->
-    [one] 1 file
-   *[other] { $count } files
-}
-health-downloading-files = Downloading: { $count ->
-    [one] 1 file
-   *[other] { $count } files
-}
-health-transferring-files = Uploading and downloading: { $count ->
-    [one] 1 file
-   *[other] { $count } files
-}
-health-file-errors-files = Some files failed: { $count ->
-    [one] 1 file
-   *[other] { $count } files
-}
-
-panel-title = rclone UI
-panel-service-missing = rclone UI service not running
-panel-open-folder = Open folder
-panel-restart = Restart
-panel-start = Start
-panel-stop = Stop
-panel-settings = Settings
-panel-recent-heading = Recently synced
-panel-show-all = Show all ({ $count })
-panel-show-less = Show less
-panel-history-title = Sync history
-panel-history-summary = { $count ->
-    [one] Last file since rclone started · newest first
-   *[other] Last { $count } files since rclone started · newest first
-}
-panel-history-unavailable = History unavailable
-panel-history-empty = Nothing synced since rclone started
-panel-last-error = Last error: { $error }
-panel-failed = Failed: { $error }
-panel-out-of-space = The cache disk is out of space. Free some space so uploads can finish.
-panel-outdated-rclone = rclone { $version } is older than the { $minimum } this app needs. Update rclone, then restart the mount; some features may misbehave until you do.
-
-panel-detail-state = Mount: { $mounted ->
-    [yes] up
-   *[no] down
-}   Service: { $running ->
-    [yes] running
-   *[no] stopped
-}
-panel-detail-rc-unreachable = rc unreachable: { $error }
-panel-detail-rclone-version = rclone { $version }
-panel-detail-uploads = Uploads: { $active } in progress, { $queued } queued
-panel-detail-cache = Cache: { $files } files, { $size }
-panel-detail-errored = Errored files: { $count }
-panel-detail-errored-full = Errored files: { $count } (cache out of space)
-
-panel-transfer-line = { $name } — { $done } / { $total } at { $speed }
-panel-transfer-line-unknown-size = { $name } — { $done } / ? at { $speed }
-panel-speed = { $size }/s
-panel-more-transfers = …and { $count } more
-
-panel-caption-join = { $head } · { $tail }
-panel-times = ×{ $count }
-
-panel-kind-created = New file
-panel-kind-updated = Changed
-panel-kind-deleted = Deleted
-panel-tip-uploaded = Uploaded to the cloud
-panel-tip-downloaded = Downloaded from the cloud
-panel-tip-deleted-upload = Deleted here, so removed from the cloud
-panel-tip-deleted-download = Deleted in the cloud, so removed here
-
-panel-offline-heading = Offline folders
-panel-offline-setup = Offline folders: finish setup in Settings
-panel-offline-summary = Offline: { $summary }
-panel-pin-waiting = Waiting for the keeper
-
-plasma-config-general = General
-plasma-config-retry = Retry
-plasma-config-read-failed = Could not read the configuration.
-plasma-config-rc-addr = rclone RC address:
-plasma-config-env-file = Environment file:
-plasma-config-service = systemd service:
-plasma-config-mount-path = Mount path:
-plasma-config-cache-dir = Cache directory:
-plasma-config-sync-interval = Sync interval (seconds):
-plasma-config-popup = Popup:
-plasma-config-show-all = Show the full history list when opened
-
-dolphin-menu = rclone
-dolphin-details = Details…
-dolphin-stop-keeping-offline = Stop keeping offline
-
-## end zone: panel
-
-## zone: kirigami (plasma/ui windows)
-details-window-title = rclone
-details-checking-sync-status = Checking sync status…
-details-heading-sync-status = Sync status
-details-heading-sharing = Sharing
-details-column-name = Name
-details-column-role = Role
-details-column-type = Type
-details-open = Open
-details-open-folder = Folder
-details-open-file = File
-details-stop-keeping-offline = Stop keeping offline
-settings-window-title = rclone settings
-settings-heading-offline = Offline folders
-settings-keep-offline-switch = Keep folders available offline
-settings-step-done = Done
-settings-step-todo = To do
-settings-setting-up = Setting up…
-settings-setup-incomplete = Setup isn't complete
-settings-no-pins = No folders are kept offline yet
-settings-no-pins-hint = In Dolphin, right-click a folder in the Drive folder, choose “rclone”, then “Keep offline”.
-settings-pin-repair = Repair
-settings-pin-open = Open
-settings-pin-remove = Remove
-settings-heading-activity = Recent offline activity
-settings-heading-dolphin = Dolphin integration
-settings-dolphin-menu-switch = Show “rclone” in Dolphin's right-click menu
-settings-dolphin-status-title = Sync status in Dolphin
-settings-dolphin-status-detail = Dolphin's plugins show sync emblems on files in the Drive folder and add an “rclone” action for details, offline folders and sharing. They talk to the background service over D-Bus.
-settings-consent-title = Turn on offline folders?
-settings-consent-intro = Keeping folders offline needs these changes. Nothing has been changed yet.
-settings-consent-cancel = Cancel
-## end zone: kirigami
-
-## zone: core-errors
-
-## end zone: core-errors

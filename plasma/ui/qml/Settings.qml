@@ -41,7 +41,7 @@ Kirigami.ApplicationWindow {
         title: Strings.t("settings-window-title")
 
         // Offline folders
-        FormCard.FormHeader { title: Strings.t("settings-heading-offline") }
+        FormCard.FormHeader { title: Strings.t("offline-heading") }
         FormCard.FormCard {
             FormCard.FormSwitchDelegate {
                 text: Strings.t("settings-keep-offline-switch")
@@ -96,7 +96,7 @@ Kirigami.ApplicationWindow {
             }
             FormCard.FormTextDelegate {
                 visible: settings.showPins && settings.noPins
-                description: Strings.t("settings-no-pins-hint")
+                description: Strings.t("plasma-settings-no-pins-hint")
             }
             Repeater {
                 model: settings.showPins ? root.pins : []
@@ -137,19 +137,19 @@ Kirigami.ApplicationWindow {
                         }
                         QQC2.Button {
                             visible: pinRow.modelData.canRepair
-                            text: Strings.t("settings-pin-repair")
+                            text: Strings.t("common-repair")
                             icon.name: "tools-wizard"
                             onClicked: settings.repair(pinRow.modelData.rel)
                         }
                         QQC2.Button {
                             visible: !pinRow.modelData.removing
-                            text: Strings.t("settings-pin-open")
+                            text: Strings.t("common-open")
                             icon.name: "document-open-folder"
                             onClicked: settings.openPin(pinRow.modelData.rel)
                         }
                         QQC2.Button {
                             visible: !pinRow.modelData.removing
-                            text: Strings.t("settings-pin-remove")
+                            text: Strings.t("common-remove")
                             icon.name: "edit-delete"
                             onClicked: settings.remove(pinRow.modelData.rel)
                         }
@@ -177,10 +177,10 @@ Kirigami.ApplicationWindow {
         }
 
         // Dolphin integration
-        FormCard.FormHeader { title: Strings.t("settings-heading-dolphin") }
+        FormCard.FormHeader { title: Strings.t("plasma-settings-dolphin-heading") }
         FormCard.FormCard {
             FormCard.FormSwitchDelegate {
-                text: Strings.t("settings-dolphin-menu-switch")
+                text: Strings.t("plasma-settings-dolphin-menu-switch")
                 checked: settings.contextMenu
                 onToggled: {
                     settings.saveContextMenu(checked);
@@ -188,8 +188,8 @@ Kirigami.ApplicationWindow {
                 }
             }
             FormCard.FormTextDelegate {
-                text: Strings.t("settings-dolphin-status-title")
-                description: Strings.t("settings-dolphin-status-detail")
+                text: Strings.t("plasma-settings-dolphin-status-title")
+                description: Strings.t("plasma-settings-dolphin-status-detail")
             }
         }
 
@@ -228,7 +228,7 @@ Kirigami.ApplicationWindow {
                 onTriggered: settings.answerConsent(true)
             },
             Kirigami.Action {
-                text: Strings.t("settings-consent-cancel")
+                text: Strings.t("common-cancel")
                 icon.name: "dialog-cancel"
                 onTriggered: settings.answerConsent(false)
             }
