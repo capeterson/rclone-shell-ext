@@ -29,12 +29,36 @@ pub fn is_unit_mode(args: &[String]) -> bool {
         .any(|f| has(args, f))
 }
 
+/// The command-line modes that run to completion and may use offline folders: they migrate an
+/// old install first, in the foreground. (Not `--offline-remove`, which uninstall must always be
+/// able to run.)
+#[must_use]
+pub fn is_cli_mode(args: &[String]) -> bool {
+    [
+        "--status",
+        "--pins",
+        "--pin",
+        "--unpin",
+        "--offline-repair",
+        "--share-url",
+        "--share-open",
+    ]
+    .iter()
+    .any(|f| has(args, f))
+}
+
 /// Start-up common to every binary, after it has set the identity and installed the config
-/// store: moves an old install over once (see [`rclone_ui_core::migrate`]). Does nothing for
-/// the unit modes and for `--migrate` itself, which does it on request.
+/// store. For the command-line modes it moves an old install over first (see
+/// [`rclone_ui_core::migrate`]); on failure it prints why on stderr and exits non-zero. It does
+/// nothing for the unit modes (the migration stops those very units), for `--migrate` itself,
+/// and for the long-running front ends (the daemon and the applet), which never block their
+/// start-up on it: they call [`rclone_ui_core::migrate::spawn_background`] once they are up.
 pub fn startup(args: &[String]) {
-    if !is_unit_mode(args) && !has(args, "--migrate") {
-        migrate::run_if_needed();
+    if is_cli_mode(args) && !is_unit_mode(args) && !has(args, "--migrate") {
+        // run_if_needed has already printed the reason.
+        if migrate::run_if_needed().is_err() {
+            std::process::exit(1);
+        }
     }
 }
 
@@ -48,7 +72,9 @@ pub fn usage() -> String {
 #[must_use]
 pub fn run(args: &[String]) -> Option<i32> {
     if has(args, "--migrate") {
-        return Some(report(migrate::command(has(args, "--dry-run"))));
+        return Some(report(
+            migrate::command(has(args, "--dry-run")).map_err(|e| e.message),
+        ));
     }
     if let Some(code) = offline_cli(args) {
         return Some(code);
@@ -134,7 +160,7 @@ fn offline_cli(args: &[String]) -> Option<i32> {
     // `--pin PATH` / `--unpin PATH` keep a folder offline or stop doing so.
     if let Some(p) = arg(args, "--pin") {
         return Some(report(
-            keeper::set_pinned(p, true).map(|r| fl!("cli-pin-keeping", folder = r)),
+            migrate::set_pinned_guarded(p, true).map(|r| fl!("cli-pin-keeping", folder = r)),
         ));
     }
     if let Some(p) = arg(args, "--unpin") {
@@ -221,6 +247,23 @@ mod tests {
         assert!(is_unit_mode(&a(&["--pin-mount", "x"])));
         assert!(!is_unit_mode(&a(&["--status"])));
         assert!(!is_unit_mode(&a(&["--migrate", "--dry-run"])));
+    }
+
+    #[test]
+    fn only_command_line_modes_migrate_at_startup() {
+        assert!(is_cli_mode(&a(&["--pin", "x"])));
+        assert!(is_cli_mode(&a(&["--status"])));
+        // The daemon, the applet, windows, uninstall and the migration itself are not.
+        for args in [
+            &["--daemon"][..],
+            &[],
+            &["--settings"],
+            &["--offline-remove"],
+            &["--migrate"],
+            &["--offline-keeper"],
+        ] {
+            assert!(!is_cli_mode(&a(args)), "{args:?}");
+        }
     }
 
     #[test]

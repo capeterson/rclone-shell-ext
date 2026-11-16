@@ -120,6 +120,8 @@ pub fn consent_items(c: Checks, cfg: &Config) -> Vec<(String, String)> {
 /// Run the setup steps that aren't done yet, in order. Returns a note for the user (where the
 /// `/etc/fuse.conf` backup went), if there is one.
 pub fn set_up(cfg: &Config) -> Result<Option<String>, String> {
+    // The old install's keeper and this one would fight over the same folders.
+    crate::migrate::guard().map_err(|e| e.message)?;
     let c = Checks::probe(cfg);
     let mut note = None;
     if !c.fuse_conf {
@@ -143,6 +145,8 @@ pub fn set_up(cfg: &Config) -> Result<Option<String>, String> {
 /// Switch offline folders on and run the setup. If it can't finish (say the password prompt was
 /// dismissed), undo it so the switch goes back off with the reason shown.
 pub fn turn_on(cfg: &Config) -> Result<Option<String>, String> {
+    // Refuse before the setting is saved, so nothing needs undoing.
+    crate::migrate::guard().map_err(|e| e.message)?;
     crate::config::store().save(&mut |c| c.offline_enabled = true)?;
     set_up(cfg).map_err(|e| {
         let _ = tear_down(cfg);

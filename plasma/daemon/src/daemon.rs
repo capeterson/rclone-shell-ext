@@ -439,6 +439,9 @@ pub fn run() -> i32 {
         }
     };
     let _ = shared.conn.set(conn);
+    // Move an old install over only now that the name is ours, and off this thread: D-Bus
+    // activation must never wait for it. `StatusJson.migration` reports how it is going.
+    let _ = rclone_ui_core::migrate::spawn_background();
     let w = shared.clone();
     std::thread::spawn(move || worker(&w, &rx));
     let p = shared.clone();

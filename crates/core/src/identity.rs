@@ -93,6 +93,12 @@ pub fn identity() -> &'static Identity {
     require(&IDENTITY)
 }
 
+/// The process identity if one was set, without panicking (for code that only peeks, such as
+/// `migrate::pending`, which tests of other crates reach before they set one).
+pub fn try_identity() -> Option<&'static Identity> {
+    IDENTITY.get()
+}
+
 /// For tests (here and in other crates): set the release identity, so code that names units
 /// and directories works without a `main`. Does nothing if an identity is already set.
 pub fn use_test_identity() {

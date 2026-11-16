@@ -470,6 +470,28 @@ pub fn rc_request(
     )
 }
 
+/// How many rc jobs rclone is still running (the keeper's bisyncs are async jobs inside the
+/// mount's rclone, so stopping the keeper's unit doesn't stop them). `None` when rclone can't
+/// be reached, e.g. because the mount service is down: then there are no jobs.
+///
+/// TODO(integrator): `keeper::running_jobs` is the same query; switch it to this.
+pub fn unfinished_jobs(cfg: &Config) -> Option<usize> {
+    let list = rc_request(cfg, "job/list", &serde_json::json!({})).ok()?;
+    Some(
+        list.get("jobids")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_i64)
+            .filter(|id| {
+                rc_request(cfg, "job/status", &serde_json::json!({ "jobid": id })).is_ok_and(|s| {
+                    s.get("finished").and_then(serde_json::Value::as_bool) == Some(false)
+                })
+            })
+            .count(),
+    )
+}
+
 /// The rclone remote (e.g. `gdrive:`) mounted at `want`, from `/proc/mounts`-formatted text.
 fn parse_mount_fs(mounts: &str, want: &str) -> Option<String> {
     let want = want.trim_end_matches('/');

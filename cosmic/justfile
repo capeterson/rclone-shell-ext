@@ -37,6 +37,13 @@ install-user: build-release
     install -Dm0755 {{target}}/release/{{shared}} ~/.local/bin/{{shared}}
     install -Dm0644 resources/{{appid}}.desktop ~/.local/share/applications/{{appid}}.desktop
     install -Dm0644 ../resources/icons/hicolor/scalable/apps/{{icon}}.svg ~/.local/share/icons/hicolor/scalable/apps/{{icon}}.svg
+    # Move an old cosmic-rclone-ui / rclone-plasma install over, in the foreground: a failure
+    # stops the recipe with the reason and leaves every old file in place.
+    ~/.local/bin/{{shared}} --migrate
+    # Only now that it worked: the old applet's files. The old binary stays while old units
+    # (an install the migration did not pick) still call it.
+    rm -f ~/.local/share/applications/{{oldappid}}.desktop ~/.local/share/icons/hicolor/scalable/apps/{{old_icon}}.svg
+    if [ ! -e ~/.config/systemd/user/{{oldname}}-offline.service ] && [ ! -e ~/.config/systemd/user/{{oldname}}-pin@.service ]; then rm -f ~/.local/bin/{{oldname}}; fi
 
 # Removes this version's files and the ones earlier versions (cosmic-rclone-ui) installed. The
 # offline-folder units go first; the shared binary stays while the Plasma front end needs it.
