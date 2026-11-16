@@ -2,13 +2,7 @@
 # The literal check (rule 4 of "UI text" in docs/architecture.md) skips them. A path listed here
 # that no longer contains a violation fails the test, so this list can only shrink: delete a
 # line when you convert the file.
-cosmic/src/app.rs
 cosmic/src/menu.rs
 cosmic/src/settings.rs
-plasma/dolphin/actions/rclonefileitemaction.cpp
-plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/config/config.qml
-plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/FullRepresentation.qml
-plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/configGeneral.qml
-plasma/plasmoid/com.ca-peterson.rclone-shell-ext/contents/ui/main.qml
 plasma/ui/qml/Details.qml
 plasma/ui/qml/Settings.qml

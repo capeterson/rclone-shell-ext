@@ -4448,6 +4448,8 @@ dependencies = [
  "libcosmic",
  "rclone-shell-ext",
  "rclone-ui-core",
+ "rclone-ui-i18n",
+ "rclone-ui-view",
  "serde",
  "tokio",
 ]
@@ -4512,6 +4514,7 @@ dependencies = [
 name = "rclone-ui-view"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "rclone-ui-core",
  "rclone-ui-i18n",
  "serde_json",

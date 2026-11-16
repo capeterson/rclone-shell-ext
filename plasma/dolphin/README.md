@@ -12,8 +12,8 @@ the client stays quiet for 10 s.
 
 ## Build
 
-Requires Qt 6, KF6 (KIO, CoreAddons, I18n) and extra-cmake-modules, e.g. on Fedora:
-`sudo dnf install cmake gcc-c++ extra-cmake-modules qt6-qtbase-devel kf6-kio-devel kf6-kcoreaddons-devel kf6-ki18n-devel`
+Requires Qt 6, KF6 (KIO, CoreAddons) and extra-cmake-modules, e.g. on Fedora:
+`sudo dnf install cmake gcc-c++ extra-cmake-modules qt6-qtbase-devel kf6-kio-devel kf6-kcoreaddons-devel`
 
     cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr
     cmake --build build

@@ -3,13 +3,15 @@
 use crate::config::{Config, ConfigExt, ConfigWatch, WATCH_EVERY};
 use crate::history::with_changes;
 use crate::mime_icon;
-use crate::pin::{self, OfflineState};
-use crate::rc::{self, human, ChangeKind, CompletedTransfer, Direction, Health, Status};
+use crate::pin::OfflineState;
+use crate::rc::{self, ChangeKind, CompletedTransfer, Direction, Health, Status};
 use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
 use cosmic::iced::platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::{time, window::Id, Alignment, Length, Limits, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget;
+use rclone_ui_i18n::fl;
+use rclone_ui_view::panel::{self, split_path};
 use std::time::Duration;
 
 const POLL_OPEN: Duration = Duration::from_secs(1);
@@ -68,6 +70,31 @@ pub enum Message {
     HistoryDebounced,
     OfflineLoaded(OfflineState),
     OpenSettings,
+}
+
+/// The button row under the popup: open the folder, control the service, open settings.
+fn action_buttons(running: bool) -> Element<'static, Message> {
+    widget::Row::new()
+        .spacing(8)
+        .push(widget::button::standard(fl!("panel-open-folder")).on_press(Message::OpenFolder))
+        .push(if running {
+            widget::button::standard(fl!("panel-restart"))
+                .on_press(Message::ServiceAction("restart"))
+        } else {
+            widget::button::suggested(fl!("panel-start")).on_press(Message::ServiceAction("start"))
+        })
+        .push(
+            widget::button::destructive(fl!("panel-stop"))
+                .on_press_maybe(running.then_some(Message::ServiceAction("stop"))),
+        )
+        .push(widget::Space::new().width(Length::Fill))
+        .push(widget::tooltip(
+            widget::button::icon(widget::icon::from_name("emblem-system-symbolic"))
+                .on_press(Message::OpenSettings),
+            widget::text::body(fl!("panel-settings")),
+            widget::tooltip::Position::Top,
+        ))
+        .into()
 }
 
 impl AppModel {
@@ -142,61 +169,6 @@ fn health_svg(h: Health) -> &'static [u8] {
     }
 }
 
-fn headline(health: Option<Health>) -> &'static str {
-    match health {
-        Some(Health::Healthy) => "Healthy",
-        Some(Health::Uploading) => "Uploading",
-        Some(Health::Downloading) => "Downloading",
-        Some(Health::Transferring) => "Uploading and downloading",
-        Some(Health::FileErrors) => "Some files failed",
-        Some(Health::CacheFull) => "Cache is full",
-        Some(Health::Unreachable) => "Can't reach rclone",
-        Some(Health::NotMounted) => "Not mounted",
-        Some(Health::ServiceStopped) => "Service stopped",
-        None => "Checking…",
-    }
-}
-
-/// The body text lines of the popup (excluding per-transfer rows), in display order.
-fn detail_lines(st: &Status) -> Vec<String> {
-    let mut lines = vec![format!(
-        "Mount: {}   Service: {}",
-        if st.mounted { "up" } else { "down" },
-        if st.service_active {
-            "running"
-        } else {
-            "stopped"
-        },
-    )];
-    if let Some(e) = &st.rc_error {
-        lines.push(format!("rc unreachable: {e}"));
-    }
-    if let Some(v) = &st.rclone_version {
-        lines.push(format!("rclone {v}"));
-    }
-    lines.push(format!(
-        "Uploads: {} in progress, {} queued",
-        st.uploads_in_progress, st.uploads_queued
-    ));
-    lines.push(format!(
-        "Cache: {} files, {}",
-        st.cache_files,
-        human(st.cache_bytes as f64)
-    ));
-    if st.errored_files > 0 || st.out_of_space {
-        lines.push(format!(
-            "Errored files: {}{}",
-            st.errored_files,
-            if st.out_of_space {
-                " (cache out of space)"
-            } else {
-                ""
-            }
-        ));
-    }
-    lines
-}
-
 /// The banner shown when the running rclone is older than the minimum this app supports.
 fn outdated_alert(version: &str) -> Element<'static, Message> {
     widget::Row::new()
@@ -204,28 +176,11 @@ fn outdated_alert(version: &str) -> Element<'static, Message> {
         .align_y(Alignment::Center)
         .push(widget::icon::from_name("dialog-warning-symbolic").size(20))
         .push(
-            widget::text::body(outdated_text(version))
+            widget::text::body(panel::outdated_text(version))
                 .width(Length::Fill)
                 .wrapping(cosmic::iced::widget::text::Wrapping::Word),
         )
         .into()
-}
-
-fn outdated_text(version: &str) -> String {
-    format!(
-        "rclone {version} is older than the {} this app needs. Update rclone, then restart \
-         the mount; some features may misbehave until you do.",
-        crate::version::MIN_RCLONE
-    )
-}
-
-/// "Offline: 2 folders · all available offline", or a nudge to finish setup.
-fn offline_line(pins: &[String], state: &OfflineState) -> String {
-    if state.updated == 0 {
-        "Offline folders: finish setup in Settings".to_string()
-    } else {
-        format!("Offline: {}", pin::summary(pins, state))
-    }
 }
 
 /// The active transfers: a caption and a full-width progress bar each, up to 8.
@@ -233,109 +188,33 @@ fn transfer_rows(st: &Status) -> Element<'_, Message> {
     let mut col = widget::Column::new().spacing(8).width(Length::Fill);
     for t in st.transfers.iter().take(8) {
         col = col
-            .push(widget::text::caption(transfer_line(t)))
+            .push(widget::text::caption(panel::transfer_line(t)))
             .push(widget::determinate_linear(t.percentage as f32 / 100.0).width(Length::Fill));
     }
     if st.transfers.len() > 8 {
-        col = col.push(widget::text::caption(format!(
-            "…and {} more",
-            st.transfers.len() - 8
+        col = col.push(widget::text::caption(panel::more_transfers(
+            st.transfers.len() - 8,
         )));
     }
     col.into()
 }
 
-/// One line describing a transfer. `size` is negative when rclone doesn't know it.
-fn transfer_line(t: &rc::Transfer) -> String {
-    let total = if t.size < 0 {
-        "?".to_string()
-    } else {
-        human(t.size as f64)
-    };
-    format!(
-        "{} — {} / {} at {}/s",
-        t.name,
-        human(t.bytes as f64),
-        total,
-        human(t.speed)
-    )
-}
-
-/// "just now", "5m ago", "3h ago", "2d ago". Empty when the time is unknown.
+/// "just now", "5 minutes ago", "3 hours ago", "2 days ago". Empty when the time is unknown.
+// The settings window may stop using this once it moves to `view::ago` directly.
+#[allow(dead_code)]
 pub(crate) fn ago(now: jiff::Timestamp, then: Option<jiff::Timestamp>) -> String {
-    let Some(then) = then else {
-        return String::new();
-    };
-    let secs = now.as_second() - then.as_second();
-    match secs {
-        i64::MIN..=59 => "just now".to_string(),
-        60..=3599 => format!("{}m ago", secs / 60),
-        3600..=86399 => format!("{}h ago", secs / 3600),
-        _ => format!("{}d ago", secs / 86400),
-    }
+    then.map_or_else(String::new, |t| {
+        rclone_ui_view::ago(now.as_second(), t.as_second())
+    })
 }
 
-/// Split a remote path into its folder (possibly empty) and file name.
-fn split_path(name: &str) -> (&str, &str) {
-    let trimmed = name.trim_end_matches('/');
-    trimmed.rsplit_once('/').unwrap_or(("", trimmed))
-}
-
-/// Second line of a history row: `Folder · 1.2 MiB · 5m ago · ×3`.
-fn recent_caption(t: &CompletedTransfer, now: jiff::Timestamp) -> String {
-    let (dir, _) = split_path(&t.name);
-    let mut parts: Vec<String> = vec![];
-    if !dir.is_empty() {
-        parts.push(dir.to_string());
-    }
-    if t.size >= 0 {
-        parts.push(human(t.size as f64));
-    }
-    let when = ago(now, t.at);
-    if !when.is_empty() {
-        parts.push(when);
-    }
-    if t.times > 1 {
-        parts.push(format!("×{}", t.times));
-    }
-    parts.join(" · ")
-}
-
-/// The kind icon and its tooltip: new, changed or deleted.
-fn kind_icon(kind: ChangeKind) -> (&'static str, &'static str) {
-    match kind {
-        ChangeKind::Created => ("document-new-symbolic", "New file"),
-        ChangeKind::Updated => ("document-edit-symbolic", "Changed"),
-        ChangeKind::Deleted => ("user-trash-symbolic", "Deleted"),
-    }
-}
-
-/// The direction arrow's tooltip, worded for what happened to the file.
-fn direction_tip(direction: Direction, kind: Option<ChangeKind>) -> &'static str {
-    match (direction, kind) {
-        (Direction::Upload, Some(ChangeKind::Deleted)) => "Deleted here, so removed from the cloud",
-        (Direction::Download, Some(ChangeKind::Deleted)) => "Deleted in the cloud, so removed here",
-        (Direction::Upload, _) => "Uploaded to the cloud",
-        (Direction::Download, _) => "Downloaded from the cloud",
-    }
-}
-
-fn with_tip<'a>(icon: Element<'a, Message>, tip: &'static str) -> Element<'a, Message> {
+fn with_tip(icon: Element<'_, Message>, tip: String) -> Element<'_, Message> {
     widget::tooltip(
         icon,
         widget::text::body(tip),
         widget::tooltip::Position::Top,
     )
     .into()
-}
-
-/// Why the history list is empty, in words.
-fn empty_history_text(st: &Status) -> &'static str {
-    if !st.service_active || st.rc_error.is_some() {
-        "History unavailable"
-    } else {
-        "Nothing synced since rclone started"
-    }
 }
 
 /// A small symbolic emblem from the bundled SVGs.
@@ -351,12 +230,12 @@ fn recent_row(t: &CompletedTransfer, now: jiff::Timestamp, detailed: bool) -> El
         .width(Length::Fill)
         .push(widget::text::body(file).ellipsize(Ellipsize::Middle(EllipsizeHeightLimit::Lines(1))))
         .push(
-            widget::text::caption(recent_caption(t, now))
+            widget::text::caption(panel::recent_caption(t, now))
                 .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
         );
     if let (true, Some(e)) = (detailed, &t.error) {
         text = text.push(
-            widget::text::caption(format!("Failed: {e}"))
+            widget::text::caption(panel::failed_line(e))
                 .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
         );
     }
@@ -366,7 +245,7 @@ fn recent_row(t: &CompletedTransfer, now: jiff::Timestamp, detailed: bool) -> El
         .push(widget::icon(mime_icon::file_icon(&t.name, ICON_SIZE)).size(ICON_SIZE))
         .push(text);
     if let Some(kind) = t.kind {
-        let (icon, tip) = kind_icon(kind);
+        let (icon, tip) = panel::kind_icon(kind);
         row = row.push(with_tip(widget::icon::from_name(icon).size(16).into(), tip));
     }
     if let Some(dir) = t.direction {
@@ -374,7 +253,7 @@ fn recent_row(t: &CompletedTransfer, now: jiff::Timestamp, detailed: bool) -> El
             Direction::Upload => include_bytes!("../../resources/emblems/uploading.svg"),
             Direction::Download => include_bytes!("../../resources/emblems/downloading.svg"),
         };
-        row = row.push(with_tip(emblem(svg), direction_tip(dir, t.kind)));
+        row = row.push(with_tip(emblem(svg), panel::direction_tip(dir, t.kind)));
     }
     if t.error.is_some() {
         row = row.push(emblem(include_bytes!("../../resources/emblems/error.svg")));
@@ -399,7 +278,7 @@ impl AppModel {
                 .spacing(8)
                 .align_y(Alignment::Center)
                 .push(widget::icon::from_name("folder-download-symbolic").size(16))
-                .push(widget::text::caption(offline_line(
+                .push(widget::text::caption(panel::offline_line(
                     &self.config.pins,
                     &self.offline,
                 )))
@@ -417,15 +296,19 @@ impl AppModel {
             .spacing(8)
             .align_y(Alignment::Center)
             .push(emblem(health.map_or(LOADING_SVG, health_svg)))
-            .push(widget::text::heading(headline(health)));
+            .push(widget::text::heading(
+                self.status
+                    .as_ref()
+                    .map_or_else(|| panel::headline(None), panel::health_label),
+            ));
         // The details live in a tooltip to keep the popup compact.
         if let Some(st) = &self.status {
             let mut tip = widget::Column::new().spacing(2);
-            for line in detail_lines(st) {
+            for line in panel::detail_lines(st) {
                 tip = tip.push(widget::text::body(line));
             }
             if let Some(e) = &st.last_error {
-                tip = tip.push(widget::text::caption(format!("Last error: {e}")));
+                tip = tip.push(widget::text::caption(panel::last_error_line(e)));
             }
             let mut header = widget::Row::new()
                 .align_y(Alignment::Center)
@@ -439,7 +322,7 @@ impl AppModel {
             if speed > 0.0 {
                 header = header
                     .push(widget::Space::new().width(Length::Fill))
-                    .push(widget::text::body(format!("{}/s", human(speed))));
+                    .push(widget::text::body(panel::speed_text(speed)));
             }
             col = col.push(header);
         } else {
@@ -463,16 +346,16 @@ impl AppModel {
             col = col.push(widget::divider::horizontal::default());
             let mut header = widget::Row::new()
                 .align_y(Alignment::Center)
-                .push(widget::text::heading("Recently synced").width(Length::Fill));
+                .push(widget::text::heading(fl!("panel-recent-heading")).width(Length::Fill));
             if !self.shown.is_empty() {
                 header = header.push(
-                    widget::button::link(format!("Show all ({})", self.shown.len()))
+                    widget::button::link(panel::show_all(self.shown.len()))
                         .on_press(Message::ShowHistory),
                 );
             }
             col = col.push(header);
             if self.shown.is_empty() {
-                col = col.push(widget::text::caption(empty_history_text(st)));
+                col = col.push(widget::text::caption(panel::empty_history_text(st)));
             } else {
                 let now = jiff::Timestamp::now();
                 let rows = self
@@ -487,27 +370,8 @@ impl AppModel {
         }
 
         let running = self.status.as_ref().is_some_and(|s| s.service_active);
-        let actions = widget::Row::new()
-            .spacing(8)
-            .push(widget::button::standard("Open folder").on_press(Message::OpenFolder))
-            .push(if running {
-                widget::button::standard("Restart").on_press(Message::ServiceAction("restart"))
-            } else {
-                widget::button::suggested("Start").on_press(Message::ServiceAction("start"))
-            })
-            .push(
-                widget::button::destructive("Stop")
-                    .on_press_maybe(running.then_some(Message::ServiceAction("stop"))),
-            )
-            .push(widget::Space::new().width(Length::Fill))
-            .push(widget::tooltip(
-                widget::button::icon(widget::icon::from_name("emblem-system-symbolic"))
-                    .on_press(Message::OpenSettings),
-                widget::text::body("Settings"),
-                widget::tooltip::Position::Top,
-            ));
         col.push(widget::divider::horizontal::default())
-            .push(actions)
+            .push(action_buttons(running))
             .into()
     }
 
@@ -520,19 +384,21 @@ impl AppModel {
                 widget::button::icon(widget::icon::from_name("go-previous-symbolic"))
                     .on_press(Message::ShowMain),
             )
-            .push(widget::text::heading("Sync history"));
+            .push(widget::text::heading(fl!("panel-history-title")));
         let mut col = widget::Column::new()
             .spacing(8)
             .padding(12)
             .width(Length::Fill)
             .push(header);
         if self.shown.is_empty() {
-            let text = self.status.as_ref().map_or("Checking…", empty_history_text);
+            let text = self
+                .status
+                .as_ref()
+                .map_or_else(|| panel::headline(None), panel::empty_history_text);
             col = col.push(widget::text::body(text));
         } else {
-            col = col.push(widget::text::caption(format!(
-                "Last {} files since rclone started · newest first",
-                self.shown.len()
+            col = col.push(widget::text::caption(panel::history_summary(
+                self.shown.len(),
             )));
             let now = jiff::Timestamp::now();
             let rows = self
@@ -727,55 +593,9 @@ mod tests {
         assert_eq!(s.outdated_rclone(), None);
         s.rclone_version = Some("v1.60.1".into());
         assert_eq!(s.outdated_rclone(), Some("v1.60.1"));
-        assert!(outdated_text("v1.60.1").contains(crate::version::MIN_RCLONE));
+        assert!(panel::outdated_text("v1.60.1").contains(crate::version::MIN_RCLONE));
         s.rclone_version = Some(format!("v{}", crate::version::MIN_RCLONE));
         assert_eq!(s.outdated_rclone(), None);
-    }
-
-    #[test]
-    fn headline_covers_every_state() {
-        assert_eq!(headline(None), "Checking…");
-        assert_eq!(headline(Some(Health::Healthy)), "Healthy");
-        assert_eq!(headline(Some(Health::NotMounted)), "Not mounted");
-        assert_eq!(headline(Some(Health::ServiceStopped)), "Service stopped");
-        assert_eq!(
-            headline(Some(Health::Transferring)),
-            "Uploading and downloading"
-        );
-    }
-
-    #[test]
-    fn detail_lines_idle() {
-        let l = detail_lines(&status());
-        assert_eq!(l[0], "Mount: up   Service: running");
-        assert_eq!(l[1], "Uploads: 0 in progress, 0 queued");
-        assert_eq!(l.len(), 3, "no error lines when healthy: {l:?}");
-    }
-
-    #[test]
-    fn detail_lines_report_problems() {
-        let mut s = status();
-        s.mounted = false;
-        s.service_active = false;
-        s.rc_error = Some("timeout".into());
-        s.errored_files = 2;
-        s.out_of_space = true;
-        let l = detail_lines(&s);
-        assert_eq!(l[0], "Mount: down   Service: stopped");
-        assert!(l.contains(&"rc unreachable: timeout".to_string()));
-        assert!(l.contains(&"Errored files: 2 (cache out of space)".to_string()));
-    }
-
-    #[test]
-    fn transfer_line_handles_unknown_size() {
-        let t = rc::Transfer {
-            name: "a.bin".into(),
-            size: -1,
-            bytes: 1024,
-            speed: 0.0,
-            ..Default::default()
-        };
-        assert_eq!(transfer_line(&t), "a.bin — 1.0 KiB / ? at 0.0 B/s");
     }
 
     #[test]
@@ -844,66 +664,12 @@ mod tests {
         assert_eq!(ago(now, None), "");
         assert_eq!(ago(now, at(0)), "just now");
         assert_eq!(ago(now, at(59)), "just now");
-        assert_eq!(ago(now, at(60)), "1m ago");
-        assert_eq!(ago(now, at(3599)), "59m ago");
-        assert_eq!(ago(now, at(3600)), "1h ago");
-        assert_eq!(ago(now, at(86399)), "23h ago");
-        assert_eq!(ago(now, at(86400)), "1d ago");
+        assert_eq!(ago(now, at(60)), "1 minute ago");
+        assert_eq!(ago(now, at(3599)), "59 minutes ago");
+        assert_eq!(ago(now, at(3600)), "1 hour ago");
+        assert_eq!(ago(now, at(86399)), "23 hours ago");
+        assert_eq!(ago(now, at(86400)), "1 day ago");
         assert_eq!(ago(now, at(-30)), "just now", "clock skew");
-    }
-
-    #[test]
-    fn split_path_separates_folder_and_file() {
-        assert_eq!(split_path("a/b/c.txt"), ("a/b", "c.txt"));
-        assert_eq!(split_path("c.txt"), ("", "c.txt"));
-        assert_eq!(split_path("a/b/"), ("a", "b"));
-    }
-
-    #[test]
-    fn icons_explain_kind_and_direction() {
-        assert_eq!(kind_icon(ChangeKind::Created).1, "New file");
-        assert_eq!(kind_icon(ChangeKind::Deleted).0, "user-trash-symbolic");
-        assert_eq!(
-            direction_tip(Direction::Upload, None),
-            "Uploaded to the cloud"
-        );
-        assert_eq!(
-            direction_tip(Direction::Download, Some(ChangeKind::Created)),
-            "Downloaded from the cloud"
-        );
-        assert_eq!(
-            direction_tip(Direction::Upload, Some(ChangeKind::Deleted)),
-            "Deleted here, so removed from the cloud"
-        );
-        assert_eq!(
-            direction_tip(Direction::Download, Some(ChangeKind::Deleted)),
-            "Deleted in the cloud, so removed here"
-        );
-    }
-
-    #[test]
-    fn recent_caption_joins_the_known_parts() {
-        let now = ts("2026-11-02T12:00:00Z");
-        let mut t = done("Docs/a.bin", 2048, Some("2026-11-02T11:55:00Z"));
-        assert_eq!(recent_caption(&t, now), "Docs · 2.0 KiB · 5m ago");
-        t.times = 3;
-        assert_eq!(recent_caption(&t, now), "Docs · 2.0 KiB · 5m ago · ×3");
-        let t = done("top.bin", -1, None);
-        assert_eq!(recent_caption(&t, now), "", "nothing known, nothing shown");
-    }
-
-    #[test]
-    fn empty_history_text_explains_itself() {
-        let mut s = status();
-        assert_eq!(
-            empty_history_text(&s),
-            "Nothing synced since rclone started"
-        );
-        s.rc_error = Some("down".into());
-        assert_eq!(empty_history_text(&s), "History unavailable");
-        s.rc_error = None;
-        s.service_active = false;
-        assert_eq!(empty_history_text(&s), "History unavailable");
     }
 
     #[test]

@@ -7,6 +7,8 @@ use rclone_ui_core::mime_icon;
 use rclone_ui_core::pin::{OfflineState, Phase};
 use rclone_ui_core::rc::{self, ChangeKind, CompletedTransfer, Direction, Health, Status};
 use rclone_ui_core::status::fmt_time;
+use rclone_ui_i18n::fl;
+use rclone_ui_view::panel;
 use serde::Serialize;
 
 const FALLBACK_ICON: &str = "text-x-generic";
@@ -30,6 +32,14 @@ pub struct StatusJson {
     pub last_error: Option<String>,
     pub rclone_version: Option<String>,
     pub outdated_rclone: Option<String>,
+    /// The warning to show for `outdated_rclone`, finished text.
+    pub outdated_text: Option<String>,
+    /// `lastError` as a finished "Last error: …" line.
+    pub last_error_text: Option<String>,
+    /// Why `recent` is empty, for when it is.
+    pub empty_history_text: String,
+    /// The label of the "show all" button.
+    pub show_all_text: String,
     pub transfers: Vec<TransferJson>,
     pub recent: Vec<RecentJson>,
     pub offline: OfflineJson,
@@ -45,6 +55,8 @@ pub struct TransferJson {
     pub speed: f64,
     pub direction: Option<Direction>,
     pub mime_icon: String,
+    /// One finished line: name, progress, size and speed.
+    pub line: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -59,11 +71,23 @@ pub struct RecentJson {
     pub times: u32,
     pub kind: Option<ChangeKind>,
     pub mime_icon: String,
+    /// "Folder · size · when · ×n", finished text.
+    pub caption: String,
+    /// "Failed: …" when the last transfer failed.
+    pub error_text: Option<String>,
+    /// Tooltip for the direction arrow.
+    pub direction_tip: Option<String>,
+    /// Freedesktop icon name for `kind`.
+    pub kind_icon: Option<String>,
+    /// Tooltip for `kind_icon`.
+    pub kind_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OfflineJson {
     pub enabled: bool,
+    /// The one-line summary, or a nudge to finish setup.
+    pub line: String,
     pub pins: Vec<PinJson>,
 }
 
@@ -75,6 +99,8 @@ pub struct PinJson {
     pub phase_label: String,
     pub phase_icon: String,
     pub error: Option<String>,
+    /// `phase_label`, with the error after it when there is one.
+    pub detail: String,
 }
 
 /// The `Health` property value for `h`.
@@ -92,41 +118,6 @@ pub fn health_name(h: Health) -> &'static str {
     }
 }
 
-fn headline(h: Health) -> &'static str {
-    match h {
-        Health::Healthy => "Healthy",
-        Health::Uploading => "Uploading",
-        Health::Downloading => "Downloading",
-        Health::Transferring => "Uploading and downloading",
-        Health::FileErrors => "Some files failed",
-        Health::CacheFull => "Cache is full",
-        Health::Unreachable => "Can't reach rclone",
-        Health::NotMounted => "Not mounted",
-        Health::ServiceStopped => "Service stopped",
-    }
-}
-
-fn health_label(st: &Status) -> String {
-    let h = st.health();
-    let base = headline(h);
-    let count = match h {
-        Health::Uploading | Health::Downloading | Health::Transferring => {
-            let n = if st.transfers.is_empty() {
-                st.uploads_in_progress + st.uploads_queued
-            } else {
-                st.transfers.len() as u64
-            };
-            Some(n)
-        }
-        Health::FileErrors => Some(st.errored_files),
-        _ => None,
-    };
-    match count {
-        Some(n) if n > 0 => format!("{base}: {n} file{}", if n == 1 { "" } else { "s" }),
-        _ => base.to_string(),
-    }
-}
-
 fn mime_icon_for(name: &str) -> String {
     mime_icon::icon_names(name)
         .into_iter()
@@ -139,17 +130,30 @@ fn offline_json(cfg: &Config, state: &OfflineState) -> OfflineJson {
         .pins
         .iter()
         .map(|rel| match state.pin(rel) {
-            Some(p) => PinJson {
-                rel: rel.clone(),
-                phase: format!("{:?}", p.phase),
-                phase_label: p.phase.label(),
-                phase_icon: p.phase.icon().to_string(),
-                error: p.error.as_ref().map(rclone_ui_core::pin::PinError::label),
-            },
+            Some(p) => {
+                let phase_label = p.phase.label();
+                let error = p.error.as_ref().map(rclone_ui_core::pin::PinError::label);
+                PinJson {
+                    rel: rel.clone(),
+                    phase: format!("{:?}", p.phase),
+                    detail: match &error {
+                        Some(e) => fl!(
+                            "offline-describe-error",
+                            line = phase_label.as_str(),
+                            error = e.as_str()
+                        ),
+                        None => phase_label.clone(),
+                    },
+                    phase_label,
+                    phase_icon: p.phase.icon().to_string(),
+                    error,
+                }
+            }
             None => PinJson {
                 rel: rel.clone(),
                 phase: format!("{:?}", Phase::Waiting),
-                phase_label: "Waiting for the keeper".to_string(),
+                phase_label: panel::pin_waiting(),
+                detail: panel::pin_waiting(),
                 phase_icon: Phase::Waiting.icon().to_string(),
                 error: None,
             },
@@ -157,6 +161,7 @@ fn offline_json(cfg: &Config, state: &OfflineState) -> OfflineJson {
         .collect();
     OfflineJson {
         enabled: cfg.offline_enabled,
+        line: panel::offline_line(&cfg.pins, state),
         pins,
     }
 }
@@ -169,9 +174,10 @@ pub fn build(
     cfg: &Config,
 ) -> StatusJson {
     let speed = st.display_speed();
+    let now = jiff::Timestamp::now();
     StatusJson {
         health: health_name(st.health()).to_string(),
-        health_label: health_label(st),
+        health_label: panel::health_label(st),
         service_active: st.service_active,
         mounted: st.mounted,
         rc_error: st.rc_error.clone(),
@@ -182,10 +188,14 @@ pub fn build(
         errored_files: st.errored_files,
         out_of_space: st.out_of_space,
         speed,
-        speed_text: format!("{}/s", rc::human(speed)),
+        speed_text: panel::speed_text(speed),
         last_error: st.last_error.clone(),
         rclone_version: st.rclone_version.clone(),
         outdated_rclone: st.outdated_rclone().map(str::to_string),
+        outdated_text: st.outdated_rclone().map(panel::outdated_text),
+        last_error_text: st.last_error.as_deref().map(panel::last_error_line),
+        empty_history_text: panel::empty_history_text(st),
+        show_all_text: panel::show_all(recent.len()),
         transfers: st
             .transfers
             .iter()
@@ -197,6 +207,7 @@ pub fn build(
                 speed: t.speed,
                 direction: t.direction(),
                 mime_icon: mime_icon_for(&t.name),
+                line: panel::transfer_line(t),
             })
             .collect(),
         recent: recent
@@ -211,6 +222,11 @@ pub fn build(
                 times: r.times,
                 kind: r.kind,
                 mime_icon: mime_icon_for(&r.name),
+                caption: panel::recent_caption(r, now),
+                error_text: r.error.as_deref().map(panel::failed_line),
+                direction_tip: r.direction.map(|d| panel::direction_tip(d, r.kind)),
+                kind_icon: r.kind.map(|k| panel::kind_icon(k).0.to_string()),
+                kind_label: r.kind.map(|k| panel::kind_icon(k).1),
             })
             .collect(),
         offline: offline_json(cfg, offline),
@@ -221,7 +237,7 @@ pub fn build(
 pub fn loading() -> StatusJson {
     StatusJson {
         health: "Loading".into(),
-        health_label: "Checking…".into(),
+        health_label: panel::headline(None),
         service_active: false,
         mounted: false,
         rc_error: None,
@@ -232,14 +248,19 @@ pub fn loading() -> StatusJson {
         errored_files: 0,
         out_of_space: false,
         speed: 0.0,
-        speed_text: format!("{}/s", rc::human(0.0)),
+        speed_text: panel::speed_text(0.0),
         last_error: None,
         rclone_version: None,
         outdated_rclone: None,
+        outdated_text: None,
+        last_error_text: None,
+        empty_history_text: panel::headline(None),
+        show_all_text: panel::show_all(0),
         transfers: Vec::new(),
         recent: Vec::new(),
         offline: OfflineJson {
             enabled: false,
+            line: String::new(),
             pins: Vec::new(),
         },
     }
@@ -328,6 +349,19 @@ mod tests {
         assert_eq!(v["uploadsQueued"], 2);
         assert_eq!(v["rcError"], Value::Null);
         assert_eq!(v["outdatedRclone"], Value::Null);
+        assert_eq!(v["outdatedText"], Value::Null);
+        assert_eq!(v["emptyHistoryText"], "Nothing synced since rclone started");
+        assert_eq!(v["showAllText"], "Show all (1)");
+        assert_eq!(
+            v["transfers"][0]["line"],
+            "Docs/a.pdf — 500.0 B / 1000.0 B at 1.0 KiB/s"
+        );
+        assert_eq!(v["recent"][0]["directionTip"], "Downloaded from the cloud");
+        assert_eq!(v["recent"][0]["kindIcon"], "document-edit-symbolic");
+        assert_eq!(v["recent"][0]["kindLabel"], "Changed");
+        assert!(v["recent"][0]["caption"].is_string());
+        assert_eq!(v["offline"]["pins"][1]["detail"], "Waiting for the keeper");
+        assert!(v["offline"]["line"].is_string());
         assert_eq!(v["transfers"][0]["direction"], "Upload");
         assert_eq!(v["transfers"][0]["mimeIcon"], "application-pdf");
         assert_eq!(v["recent"][0]["direction"], "Download");
@@ -360,7 +394,7 @@ mod tests {
             build(&st, &[], &OfflineState::default(), &Config::default()).health,
             "ServiceStopped"
         );
-        assert_eq!(health_label(&st), "Service stopped");
+        assert_eq!(panel::health_label(&st), "Service stopped");
         let l = serde_json::to_value(loading()).unwrap();
         assert_eq!(l["health"], "Loading");
         assert_eq!(l["offline"]["pins"], json!([]));

@@ -268,6 +268,106 @@ migrate-failed = rclone-shell-ext: migrating the old install failed: { $error }
 
 ## zone: panel (health-, panel-, dolphin-, plasmoid)
 
+health-checking = Checking…
+health-healthy = Healthy
+health-uploading = Uploading
+health-downloading = Downloading
+health-transferring = Uploading and downloading
+health-file-errors = Some files failed
+health-cache-full = Cache is full
+health-unreachable = Can't reach rclone
+health-not-mounted = Not mounted
+health-service-stopped = Service stopped
+health-uploading-files = Uploading: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+health-downloading-files = Downloading: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+health-transferring-files = Uploading and downloading: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+health-file-errors-files = Some files failed: { $count ->
+    [one] 1 file
+   *[other] { $count } files
+}
+
+panel-title = rclone UI
+panel-service-missing = rclone UI service not running
+panel-open-folder = Open folder
+panel-restart = Restart
+panel-start = Start
+panel-stop = Stop
+panel-settings = Settings
+panel-recent-heading = Recently synced
+panel-show-all = Show all ({ $count })
+panel-show-less = Show less
+panel-history-title = Sync history
+panel-history-summary = { $count ->
+    [one] Last file since rclone started · newest first
+   *[other] Last { $count } files since rclone started · newest first
+}
+panel-history-unavailable = History unavailable
+panel-history-empty = Nothing synced since rclone started
+panel-last-error = Last error: { $error }
+panel-failed = Failed: { $error }
+panel-out-of-space = The cache disk is out of space. Free some space so uploads can finish.
+panel-outdated-rclone = rclone { $version } is older than the { $minimum } this app needs. Update rclone, then restart the mount; some features may misbehave until you do.
+
+panel-detail-state = Mount: { $mounted ->
+    [yes] up
+   *[no] down
+}   Service: { $running ->
+    [yes] running
+   *[no] stopped
+}
+panel-detail-rc-unreachable = rc unreachable: { $error }
+panel-detail-rclone-version = rclone { $version }
+panel-detail-uploads = Uploads: { $active } in progress, { $queued } queued
+panel-detail-cache = Cache: { $files } files, { $size }
+panel-detail-errored = Errored files: { $count }
+panel-detail-errored-full = Errored files: { $count } (cache out of space)
+
+panel-transfer-line = { $name } — { $done } / { $total } at { $speed }
+panel-transfer-line-unknown-size = { $name } — { $done } / ? at { $speed }
+panel-speed = { $size }/s
+panel-more-transfers = …and { $count } more
+
+panel-caption-join = { $head } · { $tail }
+panel-times = ×{ $count }
+
+panel-kind-created = New file
+panel-kind-updated = Changed
+panel-kind-deleted = Deleted
+panel-tip-uploaded = Uploaded to the cloud
+panel-tip-downloaded = Downloaded from the cloud
+panel-tip-deleted-upload = Deleted here, so removed from the cloud
+panel-tip-deleted-download = Deleted in the cloud, so removed here
+
+panel-offline-heading = Offline folders
+panel-offline-setup = Offline folders: finish setup in Settings
+panel-offline-summary = Offline: { $summary }
+panel-pin-waiting = Waiting for the keeper
+
+plasma-config-general = General
+plasma-config-retry = Retry
+plasma-config-read-failed = Could not read the configuration.
+plasma-config-rc-addr = rclone RC address:
+plasma-config-env-file = Environment file:
+plasma-config-service = systemd service:
+plasma-config-mount-path = Mount path:
+plasma-config-cache-dir = Cache directory:
+plasma-config-sync-interval = Sync interval (seconds):
+plasma-config-popup = Popup:
+plasma-config-show-all = Show the full history list when opened
+
+dolphin-menu = rclone
+dolphin-details = Details…
+dolphin-stop-keeping-offline = Stop keeping offline
+
 ## end zone: panel
 
 ## zone: kirigami (plasma/ui windows)

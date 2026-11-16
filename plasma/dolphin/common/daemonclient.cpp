@@ -5,6 +5,7 @@
 #include <QDBusMetaType>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
+#include <QDBusReply>
 #include <QDBusVariant>
 
 namespace
@@ -13,6 +14,10 @@ const QString kService = QStringLiteral("com.ca-peterson.rclone-shell-ext");
 const QString kPath = QStringLiteral("/com/ca_peterson/rclone_shell_ext");
 const QString kIface = QStringLiteral("com.ca_peterson.RcloneShellExt1");
 constexpr qint64 kBackoffMs = 10000;
+constexpr int kStringsTimeoutMs = 300;
+// Dolphin builds a new plugin (and so a new DaemonClient) for every context menu, so the UI text
+// is cached for the whole process.
+DaemonClient::StringMap s_strings;
 }
 
 DaemonClient::DaemonClient(QObject *parent)
@@ -20,6 +25,7 @@ DaemonClient::DaemonClient(QObject *parent)
     , m_watcher(kService, QDBusConnection::sessionBus(), QDBusServiceWatcher::WatchForOwnerChange)
 {
     qDBusRegisterMetaType<StatesMap>();
+    qDBusRegisterMetaType<StringMap>();
 
     auto bus = QDBusConnection::sessionBus();
     bus.connect(kService, kPath, kIface, QStringLiteral("ItemsChanged"), this, SIGNAL(itemsChanged(QStringList)));
@@ -87,6 +93,20 @@ QString DaemonClient::getPropertyBlocking(const QString &name, int timeoutMs)
         return {};
     }
     return reply.arguments().first().value<QDBusVariant>().variant().toString();
+}
+
+QString DaemonClient::text(const QString &id)
+{
+    if (s_strings.isEmpty() && !backedOff()) {
+        auto msg = QDBusMessage::createMethodCall(kService, kPath, kIface, QStringLiteral("Strings"));
+        const QDBusReply<StringMap> reply = QDBusConnection::sessionBus().call(msg, QDBus::Block, kStringsTimeoutMs);
+        if (reply.isValid()) {
+            s_strings = reply.value();
+        } else {
+            noteError();
+        }
+    }
+    return s_strings.value(id, id);
 }
 
 void DaemonClient::refreshMountPath()

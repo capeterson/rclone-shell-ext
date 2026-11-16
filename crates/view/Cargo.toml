@@ -9,6 +9,7 @@ description = "Toolkit-free presentation model for the rclone UI front ends: wha
 name = "rclone_ui_view"
 
 [dependencies]
+jiff.workspace = true
 rclone-ui-core.workspace = true
 rclone-ui-i18n.workspace = true
 serde_json.workspace = true

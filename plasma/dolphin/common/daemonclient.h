@@ -18,6 +18,7 @@ class DaemonClient : public QObject
     Q_OBJECT
 public:
     using StatesMap = QMap<QString, QStringList>;
+    using StringMap = QMap<QString, QString>;
 
     explicit DaemonClient(QObject *parent = nullptr);
 
@@ -36,6 +37,10 @@ public:
     /// Blocking property read with a short timeout, for callers that must answer synchronously
     /// (e.g. a context-menu plugin instantiated per menu). Empty on error/timeout.
     QString getPropertyBlocking(const QString &name, int timeoutMs);
+    /// The UI text for message `id`, from the daemon's Strings() (read once per process, with a
+    /// short blocking call). Falls back to the id itself when the daemon can't be reached.
+    QString text(const QString &id);
+    QString text(const char *id) { return text(QString::fromLatin1(id)); }
     /// If the mount path is unknown, fetch it with a blocking call. Returns mountPath().
     QString ensureMountPath(int timeoutMs);
 

@@ -9,6 +9,8 @@ description = "COSMIC panel applet showing rclone mount and upload status"
 jiff.workspace = true
 rclone-shell-ext.workspace = true
 rclone-ui-core.workspace = true
+rclone-ui-i18n.workspace = true
+rclone-ui-view.workspace = true
 serde.workspace = true
 tokio.workspace = true
 

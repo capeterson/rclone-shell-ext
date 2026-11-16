@@ -28,6 +28,7 @@ Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-s
 | `OpenDetails(s path)` | Spawns `rclone-shell-ext-plasma --menu <path>`. `path` is an absolute local path, or remote-relative if it doesn't start with `/`. |
 | `OpenSettings()` | Spawns `rclone-shell-ext-plasma --settings`. |
 | `FileStates(as paths) -> a{sas}` | Maps each absolute local path to emblem icon names (see the Overlay emblems section below). A path outside the mount maps to `[]`. This must answer quickly from a cache: a cache miss returns `[]` straight away and computes the state in the background. When the state is ready, the daemon emits `ItemsChanged`. |
+| `Strings() -> a{ss}` | Every UI message that has no variables (id → text), in the daemon's language (`rclone_ui_i18n::static_messages()`). The plasmoid and the Dolphin plugins use it for all their wording; ids that need arguments never appear here and arrive preformatted in `StatusJson`. Call it once and cache it. Being a method call, it also D-Bus-activates the daemon. |
 | `GetConfig() -> s` | The config as JSON (fields from `rclone_ui_core::config::Config`). |
 | `SetConfig(s json) -> s` | Merges these JSON fields into the config, saves it, and returns `""` on success or an error message. |
 
@@ -57,18 +58,27 @@ Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-s
   "lastError": null,
   "rcloneVersion": "v1.75.2",
   "outdatedRclone": null,
+  "outdatedText": null,
+  "lastErrorText": null,
+  "emptyHistoryText": "Nothing synced since rclone started",
+  "showAllText": "Show all (1)",
   "transfers": [
     {"name": "Docs/a.pdf", "size": 1000, "bytes": 500, "percentage": 50, "speed": 1024.0,
-     "direction": "Upload", "mimeIcon": "application-pdf"}
+     "direction": "Upload", "mimeIcon": "application-pdf",
+     "line": "Docs/a.pdf — 500.0 B / 1000.0 B at 1.0 KiB/s"}
   ],
   "recent": [
     {"name": "Docs/b.txt", "size": 10, "at": "2026-11-14T12:00:00Z", "atText": "12:00",
-     "error": null, "direction": "Download", "times": 2, "kind": "Updated", "mimeIcon": "text-plain"}
+     "error": null, "direction": "Download", "times": 2, "kind": "Updated", "mimeIcon": "text-plain",
+     "caption": "Docs · 10 B · 5 minutes ago · ×2", "errorText": null,
+     "directionTip": "Downloaded from the cloud", "kindIcon": "document-edit-symbolic",
+     "kindLabel": "Changed"}
   ],
   "offline": {
     "enabled": true,
+    "line": "Offline: 1 folder · all available offline",
     "pins": [{"rel": "Projects", "phase": "Ready", "phaseLabel": "Available offline",
-              "phaseIcon": "emblem-ok-symbolic", "error": null}]
+              "phaseIcon": "emblem-ok-symbolic", "error": null, "detail": "Available offline"}]
   }
 }
 ```
@@ -78,6 +88,11 @@ Notes on the fields:
 - `direction` is `"Upload"`, `"Download"`, or `null`.
 - `kind` is `"Created"`, `"Updated"`, `"Deleted"`, or `null`.
 - `mimeIcon` is a freedesktop icon name chosen from the file name only.
+- Fields named `health`, `phase`, `direction`, `kind` and `outdatedRclone` are machine values (codes); show the neighbouring finished text instead: `healthLabel`, `phaseLabel`/`detail`, `directionTip`, `kindLabel`/`kindIcon`, `outdatedText`. Never recompose text from the codes.
+- `outdatedText`, `lastErrorText`, `errorText` and `directionTip` are `null` when there is nothing to say. `emptyHistoryText` explains an empty `recent`. `showAllText` is the label of the button that expands the history.
+- `transfers[].line` and `recent[].caption` are finished one-line descriptions (name/progress/speed, and folder/size/age/count). `kindIcon` is a freedesktop icon name.
+- `offline.line` is the one-line offline summary (or a nudge to finish setup); `pins[].detail` is `phaseLabel` followed by the error when there is one.
+- Wording that needs no arguments (button labels, headings) comes from `Strings()`, not from here.
 
 ## Overlay emblems (`FileStates`)
 

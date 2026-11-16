@@ -12,6 +12,8 @@ PlasmaExtras.Representation {
 
     // The root PlasmoidItem (main.qml); provides status, call().
     property var host: null
+    // The daemon's UI text (main.qml's `s`).
+    property var s: ({})
 
     readonly property var st: host ? host.status : null
     readonly property bool available: st !== null
@@ -28,30 +30,6 @@ PlasmaExtras.Representation {
     Layout.preferredHeight: Kirigami.Units.gridUnit * 26
 
     collapseMarginsHint: true
-
-    function kindInfo(kind) {
-        switch (kind) {
-        case "Created": return { icon: "list-add-symbolic", text: i18n("New file") };
-        case "Updated": return { icon: "document-edit-symbolic", text: i18n("Changed") };
-        case "Deleted": return { icon: "edit-delete-symbolic", text: i18n("Deleted") };
-        }
-        return null;
-    }
-
-    function directionText(dir, kind) {
-        if (dir === "Upload") {
-            return kind === "Deleted" ? i18n("Deleted here, so removed from the cloud") : i18n("Uploaded to the cloud");
-        }
-        if (dir === "Download") {
-            return kind === "Deleted" ? i18n("Deleted in the cloud, so removed here") : i18n("Downloaded from the cloud");
-        }
-        return "";
-    }
-
-    function dirName(path) {
-        const i = path.lastIndexOf("/");
-        return i > 0 ? path.substring(0, i) : "";
-    }
 
     function baseName(path) {
         return path.substring(path.lastIndexOf("/") + 1);
@@ -73,7 +51,7 @@ PlasmaExtras.Representation {
                 level: 3
                 Layout.fillWidth: true
                 elide: Text.ElideRight
-                text: full.available ? (full.st.healthLabel || "") : i18n("rclone UI")
+                text: full.available ? (full.st.healthLabel || "") : full.s["panel-title"]
             }
             PlasmaComponents3.Label {
                 visible: full.available && (full.st.speedText || "") !== ""
@@ -90,7 +68,7 @@ PlasmaExtras.Representation {
             width: parent.width - Kirigami.Units.gridUnit * 4
             visible: !full.available
             iconName: "rclone-shell-ext-loading"
-            text: i18n("rclone UI service not running")
+            text: full.s["panel-service-missing"]
         }
 
         PlasmaComponents3.ScrollView {
@@ -108,13 +86,13 @@ PlasmaExtras.Representation {
                         const w = [];
                         if (!full.available) return w;
                         if (full.st.outdatedRclone)
-                            w.push({ type: Kirigami.MessageType.Warning, text: String(full.st.outdatedRclone) });
+                            w.push({ type: Kirigami.MessageType.Warning, text: String(full.st.outdatedText) });
                         if (full.st.rcError)
                             w.push({ type: Kirigami.MessageType.Error, text: String(full.st.rcError) });
                         if (full.st.lastError)
-                            w.push({ type: Kirigami.MessageType.Error, text: i18n("Last error: %1", String(full.st.lastError)) });
+                            w.push({ type: Kirigami.MessageType.Error, text: String(full.st.lastErrorText) });
                         if (full.st.outOfSpace)
-                            w.push({ type: Kirigami.MessageType.Warning, text: i18n("The cache disk is out of space. Free some space so uploads can finish.") });
+                            w.push({ type: Kirigami.MessageType.Warning, text: full.s["panel-out-of-space"] });
                         return w;
                     }
                     delegate: Kirigami.InlineMessage {
@@ -149,7 +127,7 @@ PlasmaExtras.Representation {
                             PlasmaComponents3.Label {
                                 Layout.fillWidth: true
                                 elide: Text.ElideMiddle
-                                text: tr.modelData.name
+                                text: tr.modelData.line
                             }
                             PlasmaComponents3.ProgressBar {
                                 Layout.fillWidth: true
@@ -172,13 +150,13 @@ PlasmaExtras.Representation {
                     level: 5
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.topMargin: Kirigami.Units.smallSpacing
-                    text: i18n("Offline folders")
+                    text: full.s["panel-offline-heading"]
                 }
                 PlasmaComponents3.Label {
-                    visible: full.offlineEnabled && full.pins.length === 0
+                    visible: full.offlineEnabled
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     opacity: 0.7
-                    text: i18n("Offline folders: finish setup in Settings")
+                    text: full.available && full.st.offline ? String(full.st.offline.line) : ""
                 }
                 Repeater {
                     model: full.offlineEnabled ? full.pins : []
@@ -207,7 +185,7 @@ PlasmaExtras.Representation {
                                 elide: Text.ElideRight
                                 font: Kirigami.Theme.smallFont
                                 opacity: 0.7
-                                text: pin.modelData.error ? i18n("%1: %2", pin.modelData.phaseLabel, pin.modelData.error) : pin.modelData.phaseLabel
+                                text: pin.modelData.detail
                                 color: pin.modelData.error ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                             }
                         }
@@ -223,11 +201,11 @@ PlasmaExtras.Representation {
                     Kirigami.Heading {
                         level: 5
                         Layout.fillWidth: true
-                        text: i18n("Recent")
+                        text: full.s["panel-recent-heading"]
                     }
                     PlasmaComponents3.ToolButton {
                         visible: full.recent.length > 10 || full.showAll
-                        text: full.showAll ? i18n("Show less") : i18n("Show all (%1)", full.recent.length)
+                        text: full.showAll ? full.s["panel-show-less"] : String(full.st.showAllText)
                         onClicked: full.showAll = !full.showAll
                     }
                 }
@@ -235,7 +213,7 @@ PlasmaExtras.Representation {
                     visible: full.recent.length === 0
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     opacity: 0.7
-                    text: i18n("Nothing synced since rclone started")
+                    text: full.available ? String(full.st.emptyHistoryText) : ""
                 }
 
                 Repeater {
@@ -243,7 +221,6 @@ PlasmaExtras.Representation {
                     delegate: PlasmaComponents3.ItemDelegate {
                         id: row
                         required property var modelData
-                        readonly property var kind: full.kindInfo(modelData.kind)
                         Layout.fillWidth: true
                         onClicked: full.host.call("OpenDetails", [modelData.name])
 
@@ -268,14 +245,7 @@ PlasmaExtras.Representation {
                                     font: Kirigami.Theme.smallFont
                                     opacity: 0.7
                                     color: row.modelData.error ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
-                                    text: {
-                                        const parts = [];
-                                        const d = full.dirName(row.modelData.name);
-                                        if (d) parts.push(d);
-                                        parts.push(row.modelData.error ? i18n("Failed: %1", row.modelData.error) : (row.modelData.atText || ""));
-                                        if ((row.modelData.times || 1) > 1) parts.push("×" + row.modelData.times);
-                                        return parts.join(" · ");
-                                    }
+                                    text: row.modelData.errorText ? row.modelData.errorText : row.modelData.caption
                                 }
                             }
                             Kirigami.Icon {
@@ -286,18 +256,18 @@ PlasmaExtras.Representation {
                                 HoverHandler { id: dirHover }
                                 PlasmaComponents3.ToolTip {
                                     visible: dirHover.hovered
-                                    text: full.directionText(row.modelData.direction, row.modelData.kind)
+                                    text: row.modelData.directionTip || ""
                                 }
                             }
                             Kirigami.Icon {
-                                visible: row.kind !== null
-                                source: row.kind ? row.kind.icon : ""
+                                visible: !!row.modelData.kindIcon
+                                source: row.modelData.kindIcon || ""
                                 implicitWidth: Kirigami.Units.iconSizes.small
                                 implicitHeight: Kirigami.Units.iconSizes.small
                                 HoverHandler { id: kindHover }
                                 PlasmaComponents3.ToolTip {
-                                    visible: kindHover.hovered && row.kind !== null
-                                    text: row.kind ? row.kind.text : ""
+                                    visible: kindHover.hovered && !!row.modelData.kindIcon
+                                    text: row.modelData.kindLabel || ""
                                 }
                             }
                         }
@@ -313,27 +283,27 @@ PlasmaExtras.Representation {
             spacing: Kirigami.Units.smallSpacing
             PlasmaComponents3.Button {
                 icon.name: "folder-open-symbolic"
-                text: i18n("Open folder")
+                text: full.s["panel-open-folder"]
                 enabled: full.available
                 onClicked: full.host.call("OpenFolder")
             }
             PlasmaComponents3.Button {
                 icon.name: "view-refresh-symbolic"
-                text: i18n("Restart")
+                text: full.s["panel-restart"]
                 enabled: full.available
                 onClicked: full.action("restart")
             }
             PlasmaComponents3.Button {
                 readonly property bool active: !full.available || full.st.serviceActive
                 icon.name: active ? "media-playback-stop-symbolic" : "media-playback-start-symbolic"
-                text: active ? i18n("Stop") : i18n("Start")
+                text: active ? full.s["panel-stop"] : full.s["panel-start"]
                 enabled: full.available
                 onClicked: full.action(active ? "stop" : "start")
             }
             Item { Layout.fillWidth: true }
             PlasmaComponents3.Button {
                 icon.name: "configure-symbolic"
-                text: i18n("Settings…")
+                text: full.s["panel-settings"]
                 enabled: full.available
                 onClicked: full.host.call("OpenSettings")
             }

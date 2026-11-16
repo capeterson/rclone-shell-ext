@@ -12,7 +12,7 @@ use rclone_ui_core::config::{expand, store, Config};
 use rclone_ui_core::pin::OfflineState;
 use rclone_ui_core::rc::{self, CompletedTransfer};
 use rclone_ui_view::history::History;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -135,6 +135,12 @@ impl Service {
 
     fn open_settings(&self) {
         spawn_self(&["--settings"]);
+    }
+
+    /// Every argument-free UI message in the daemon's language, for the plasmoid and the Dolphin
+    /// plugins, which cannot load the Fluent files themselves.
+    fn strings(&self) -> BTreeMap<String, String> {
+        rclone_ui_i18n::static_messages()
     }
 
     /// Answers from the cache only; misses return `[]` and are computed in the background.
@@ -398,6 +404,7 @@ fn worker(shared: &Arc<Shared>, rx: &Receiver<String>) {
 }
 
 pub fn run() -> i32 {
+    rclone_ui_i18n::init();
     let (tx, rx) = mpsc::channel();
     let cfg = store().load();
     let shared = Arc::new(Shared {
