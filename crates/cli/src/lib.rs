@@ -29,22 +29,15 @@ pub fn is_unit_mode(args: &[String]) -> bool {
         .any(|f| has(args, f))
 }
 
-/// The command-line modes that run to completion and may use offline folders: they migrate an
-/// old install first, in the foreground. (Not `--offline-remove`, which uninstall must always be
-/// able to run.)
+/// The command-line modes that change offline folders: they migrate an old install first, in the
+/// foreground. Read-only modes (`--status`, `--pins`, `--share-url`, `--share-open`) never wait
+/// on a migration, and neither does `--offline-remove`, which uninstall must always be able to
+/// run.
 #[must_use]
 pub fn is_cli_mode(args: &[String]) -> bool {
-    [
-        "--status",
-        "--pins",
-        "--pin",
-        "--unpin",
-        "--offline-repair",
-        "--share-url",
-        "--share-open",
-    ]
-    .iter()
-    .any(|f| has(args, f))
+    ["--pin", "--unpin", "--offline-repair"]
+        .iter()
+        .any(|f| has(args, f))
 }
 
 /// Start-up common to every binary, after it has set the identity and installed the config
@@ -252,7 +245,17 @@ mod tests {
     #[test]
     fn only_command_line_modes_migrate_at_startup() {
         assert!(is_cli_mode(&a(&["--pin", "x"])));
-        assert!(is_cli_mode(&a(&["--status"])));
+        assert!(is_cli_mode(&a(&["--unpin", "x"])));
+        assert!(is_cli_mode(&a(&["--offline-repair"])));
+        // Read-only modes must not block on a migration.
+        for args in [
+            &["--status"][..],
+            &["--pins"],
+            &["--share-url", "x"],
+            &["--share-open", "x"],
+        ] {
+            assert!(!is_cli_mode(&a(args)), "{args:?}");
+        }
         // The daemon, the applet, windows, uninstall and the migration itself are not.
         for args in [
             &["--daemon"][..],
