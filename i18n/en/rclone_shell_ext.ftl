@@ -260,6 +260,17 @@ migrate-failed = rclone-shell-ext: migrating the old install failed: { $error }
 
 ## zone: cosmic-details
 
+cosmic-details-title = rclone
+cosmic-details-loading = Checking sync status…
+cosmic-details-sync-heading = Sync status
+cosmic-details-sharing-heading = Sharing
+cosmic-details-col-name = Name
+cosmic-details-col-role = Role
+cosmic-details-col-type = Type
+cosmic-details-open = Open
+cosmic-details-open-folder = Folder
+cosmic-details-open-file = File
+
 ## end zone: cosmic-details
 
 ## zone: cosmic-settings
