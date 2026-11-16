@@ -31,12 +31,14 @@ struct Sandbox {
     sd: RefCell<SystemdState>,
     /// Unfinished-job counts to report, one per query; the last one repeats.
     jobs: RefCell<Vec<usize>>,
-    /// `None`: the rc server can't be reached.
-    jobs_reachable: Cell<bool>,
+    /// What the rc probe says instead of a count: `NotRunning` (refused) or unknown.
+    jobs_error: RefCell<Option<RcProbeError>>,
     mountinfo: RefCell<String>,
     sleeps: Cell<u32>,
     /// Make every systemctl that changes something fail.
     break_systemctl: Cell<bool>,
+    /// Make a systemctl fail when its arguments (joined by spaces) are exactly one of these.
+    fail_on: RefCell<Vec<String>>,
 }
 
 fn glob_match(pattern: &str, unit: &str) -> bool {
@@ -63,7 +65,8 @@ impl Sandbox {
             calls: RefCell::default(),
             sd: RefCell::default(),
             jobs: RefCell::new(vec![0]),
-            jobs_reachable: Cell::new(true),
+            jobs_error: RefCell::new(None),
+            fail_on: RefCell::default(),
             mountinfo: RefCell::default(),
             sleeps: Cell::new(0),
             break_systemctl: Cell::new(false),
@@ -146,6 +149,9 @@ impl Sandbox {
         if self.break_systemctl.get() {
             return Err("bus unavailable".into());
         }
+        if self.fail_on.borrow().contains(&args.join(" ")) {
+            return Err(format!("{} failed", args.join(" ")));
+        }
         let globbed = unit.contains('*');
         if matches!(verb, "stop" | "disable" | "enable" | "start")
             && !globbed
@@ -178,12 +184,12 @@ impl Sandbox {
 
     fn run_with<T>(&self, exe: &str, f: impl FnOnce(&Env) -> T) -> T {
         let runner = |args: &[&str]| self.fake_systemctl(args);
-        let jobs = |_: &Config| -> Option<usize> {
-            if !self.jobs_reachable.get() {
-                return None;
+        let jobs = |_: &Config| -> Result<usize, RcProbeError> {
+            if let Some(e) = self.jobs_error.borrow().clone() {
+                return Err(e);
             }
             let mut v = self.jobs.borrow_mut();
-            Some(if v.len() > 1 { v.remove(0) } else { v[0] })
+            Ok(if v.len() > 1 { v.remove(0) } else { v[0] })
         };
         let mountinfo = || self.mountinfo.borrow().clone();
         let sleep = |_: Duration| self.sleeps.set(self.sleeps.get() + 1);
@@ -687,8 +693,73 @@ fn a_run_that_stopped_part_way_finishes_on_the_next_run() {
     assert!(sb.units().join("rclone-shell-ext-offline.service").exists());
     assert!(!sb.units().join("rclone-plasma-offline.service").exists());
     assert!(sb.state().join("rclone-shell-ext/migrated-v1").exists());
-    // The config that was already there is kept.
-    assert_eq!(sb.new_config().rc_addr, "half:1");
+    // The old settings are merged over the half-written file.
+    assert_eq!(sb.new_config().rc_addr, "127.0.0.1:5599");
+}
+
+#[test]
+fn a_config_saved_by_a_new_front_end_meanwhile_gets_the_old_settings_merged_in() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    // A front end saved defaults (and a choice of its own) while the migration was pending.
+    put(
+        &sb.config().join("rclone-shell-ext/config.toml"),
+        "rc_addr = \"127.0.0.1:5572\"\ncontext_menu = false\noffline_enabled = false\npins = []\n",
+    );
+    let plan = sb.run_with("/new/bin/rclone-shell-ext", plan).unwrap();
+    assert!(plan.to_string().contains("already existed"), "{plan}");
+    sb.migrate().unwrap();
+    let cfg = sb.new_config();
+    // The old install's settings win for what it had ...
+    assert_eq!(cfg.rc_addr, "127.0.0.1:5599");
+    assert!(cfg.offline_enabled);
+    assert_eq!(cfg.pins, ["wallpaper"]);
+    assert_eq!(cfg.sync_interval_secs, 120);
+    // ... and the new file keeps what only it had a say in.
+    assert!(!cfg.context_menu);
+    assert!(sb
+        .systemd()
+        .enabled
+        .contains("rclone-shell-ext-offline.service"));
+}
+
+#[test]
+fn a_corrupt_new_config_aborts_before_anything_changes() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    put(
+        &sb.config().join("rclone-shell-ext/config.toml"),
+        "rc_addr = [broken",
+    );
+    let before = (sb.snapshot(), sb.systemd());
+    let err = sb.migrate().unwrap_err();
+    assert_eq!(err.code, MigrateError::Conflict, "{err}");
+    assert_eq!((sb.snapshot(), sb.systemd()), before);
+}
+
+#[test]
+fn the_migrations_own_config_write_is_not_refused_by_the_pending_guard() {
+    // The store the front ends use refuses to save while the old install is pending; the
+    // migration writes through the unguarded path and succeeds with the marker still absent.
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    let path = sb.config().join("rclone-shell-ext/config.toml");
+    let guarded = TomlStore::guarded(path.clone());
+    // Status here comes from the sandbox's files, as `pending()` would see them.
+    let st = pending_in(&sb.config(), &sb.data(), &sb.state());
+    assert_eq!(st, MigrationStatus::Pending);
+    assert!(guarded
+        .save_when(st, &mut |c| c.offline_enabled = true)
+        .is_err());
+    assert!(!path.exists());
+    sb.migrate().unwrap();
+    assert!(sb.new_config().offline_enabled);
+    assert!(guarded
+        .save_when(
+            pending_in(&sb.config(), &sb.data(), &sb.state()),
+            &mut |c| c.context_menu = false
+        )
+        .is_ok());
 }
 
 #[test]
@@ -826,9 +897,52 @@ fn a_pin_mount_that_stays_puts_the_old_keeper_back() {
 fn an_unreachable_rc_server_means_no_jobs() {
     let sb = Sandbox::new();
     sb.seed_plasma(true);
-    sb.jobs_reachable.set(false);
+    *sb.jobs_error.borrow_mut() = Some(RcProbeError::NotRunning);
     sb.migrate().unwrap();
     assert_eq!(sb.sleeps.get(), 0);
+}
+
+#[test]
+fn an_rc_server_that_answers_badly_is_unknown_not_quiet() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    *sb.jobs_error.borrow_mut() = Some(RcProbeError::Other("status code 401".into()));
+    let files = sb.snapshot();
+    let err = sb.migrate().unwrap_err();
+    assert_eq!(err.code, MigrateError::SyncInFlight, "{err}");
+    // Polled for the whole quiet timeout (120 s at 2 s a poll), then put the old keeper back.
+    assert_eq!(sb.sleeps.get(), 59);
+    assert_eq!(sb.snapshot(), files);
+    assert!(sb
+        .systemd()
+        .active
+        .contains("rclone-plasma-offline.service"));
+}
+
+#[test]
+fn an_unknown_probe_that_recovers_lets_the_migration_go_on() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    *sb.jobs_error.borrow_mut() = Some(RcProbeError::Other("timeout".into()));
+    let flaky = |_: &Config| -> Result<usize, RcProbeError> { Ok(0) };
+    let n = Cell::new(0);
+    let probe = |c: &Config| {
+        n.set(n.get() + 1);
+        if n.get() < 3 {
+            Err(RcProbeError::Other("timeout".into()))
+        } else {
+            flaky(c)
+        }
+    };
+    sb.run_with("/new/bin/rclone-shell-ext", |e| {
+        let e = Env {
+            unfinished_jobs: &probe,
+            ..clone_env(e)
+        };
+        run(&e)
+    })
+    .unwrap();
+    assert_eq!(sb.sleeps.get(), 2);
 }
 
 #[test]
@@ -865,7 +979,7 @@ fn a_keeper_that_was_not_running_is_enabled_but_not_started() {
 }
 
 #[test]
-fn a_failing_stop_leaves_the_files_alone() {
+fn a_failing_stop_leaves_the_files_alone_and_puts_the_old_keeper_back() {
     let sb = Sandbox::new();
     sb.seed_plasma(true);
     sb.break_systemctl.set(true);
@@ -875,12 +989,73 @@ fn a_failing_stop_leaves_the_files_alone() {
         err.contains("step 1") && err.contains("bus unavailable"),
         "{err}"
     );
-    // Only the journal (written before the first change) differs.
-    let mut after = sb.snapshot();
-    assert!(after
-        .remove("state/rclone-shell-ext-migrate-journal.json")
-        .is_some());
-    assert_eq!(after, before);
+    // Systemd is broken, so it can't be put back either, and the message says so.
+    assert!(err.contains("could not be fully put back"), "{err}");
+    // The journal is forgotten: a later attempt starts from what is then true.
+    assert_eq!(sb.snapshot(), before);
+}
+
+#[test]
+fn a_failing_pin_stop_before_any_move_puts_the_old_keeper_back() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    sb.fail_on
+        .borrow_mut()
+        .push("stop rclone-plasma-pin@*.service".into());
+    let before = (sb.snapshot(), sb.systemd());
+    let err = sb.migrate().unwrap_err();
+    assert!(err.message.contains("put back"), "{err}");
+    assert!(!err.message.contains("could not"), "{err}");
+    assert!(err.message.contains("pin@*.service failed"), "{err}");
+    // Nothing renamed, no journal, and the keeper (stopped and disabled by the earlier steps)
+    // is enabled and running again.
+    assert_eq!((sb.snapshot(), sb.systemd()), before);
+    assert!(sb.data().join("rclone-plasma").exists());
+    assert!(!sb
+        .state()
+        .join("rclone-shell-ext-migrate-journal.json")
+        .exists());
+    let sd = sb.systemd();
+    assert!(sd.enabled.contains("rclone-plasma-offline.service"));
+    assert!(sd.active.contains("rclone-plasma-offline.service"));
+}
+
+#[test]
+fn the_old_keeper_is_started_again_when_it_was_enabled_and_the_mount_runs() {
+    // Enabled but not active (e.g. activating) while the mount service is up: EnableKeeper's
+    // rule, so a keeper that was merely between restarts comes back.
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    sb.sd
+        .borrow_mut()
+        .active
+        .remove("rclone-plasma-offline.service");
+    sb.fail_on
+        .borrow_mut()
+        .push("stop rclone-plasma-pin@*.service".into());
+    sb.migrate().unwrap_err();
+    assert!(sb
+        .systemd()
+        .active
+        .contains("rclone-plasma-offline.service"));
+}
+
+#[test]
+fn a_restore_that_fails_is_part_of_the_error() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    {
+        let mut f = sb.fail_on.borrow_mut();
+        f.push("stop rclone-plasma-pin@*.service".into());
+        f.push("start rclone-plasma-offline.service".into());
+    }
+    let err = sb.migrate().unwrap_err();
+    assert!(err.message.contains("could not be fully put back"), "{err}");
+    assert!(
+        err.message
+            .contains("start rclone-plasma-offline.service failed"),
+        "{err}"
+    );
 }
 
 // ---- interrupted runs end where an uninterrupted one does ----
@@ -970,7 +1145,7 @@ fn the_journal_records_codes_and_is_gone_after_success() {
     let j: Journal = serde_json::from_str(&text).unwrap();
     assert_eq!(j.source, "plasma");
     assert!(j.keeper_was_enabled && j.keeper_was_active && j.offline_enabled && j.had_units);
-    assert_eq!(j.pins, [ID]);
+    assert_eq!(j.service, "rclone-gdrive.service");
     sb.migrate().unwrap();
     assert!(!sb
         .state()
@@ -988,9 +1163,7 @@ fn pending_follows_the_marker_and_the_old_install() {
     sb.seed_plasma(true);
     assert_eq!(st(&sb), MigrationStatus::Pending);
     // A failed attempt is remembered as a code.
-    let res = sb.run_with("/new/bin/rclone-shell-ext", |e| {
-        run_locked(e, Duration::from_secs(1))
-    });
+    let res = sb.run_with("/new/bin/rclone-shell-ext", |e| run_locked(e, Wait::Poll));
     assert!(res.is_ok());
     assert_eq!(st(&sb), MigrationStatus::NotNeeded);
 
@@ -998,10 +1171,7 @@ fn pending_follows_the_marker_and_the_old_install() {
     sb.seed_plasma(true);
     *sb.jobs.borrow_mut() = vec![1];
     assert!(sb
-        .run_with("/new/bin/rclone-shell-ext", |e| run_locked(
-            e,
-            Duration::from_secs(1)
-        ))
+        .run_with("/new/bin/rclone-shell-ext", |e| run_locked(e, Wait::Poll))
         .is_err());
     let failed = st(&sb);
     assert_eq!(failed, MigrationStatus::Failed(MigrateError::SyncInFlight));
@@ -1012,10 +1182,8 @@ fn pending_follows_the_marker_and_the_old_install() {
     assert_ne!(failed.label(), "");
     // Asking changed nothing; a later success clears the failure.
     *sb.jobs.borrow_mut() = vec![0];
-    sb.run_with("/new/bin/rclone-shell-ext", |e| {
-        run_locked(e, Duration::from_secs(1))
-    })
-    .unwrap();
+    sb.run_with("/new/bin/rclone-shell-ext", |e| run_locked(e, Wait::Poll))
+        .unwrap();
     assert_eq!(st(&sb), MigrationStatus::NotNeeded);
     assert!(!sb.state().join("rclone-shell-ext-migrate-error").exists());
 }
@@ -1044,13 +1212,33 @@ fn offline_setup_is_refused_while_an_old_install_waits() {
 }
 
 #[test]
-fn the_lock_loser_waits_for_the_marker() {
+fn the_lock_is_an_flock_that_a_second_open_cannot_take() {
     let sb = Sandbox::new();
     sb.run_with("/x", |env| {
-        // Free: taken, and released on drop.
-        let g = acquire_wait(env, Duration::from_secs(60)).unwrap();
-        assert!(g.is_some() && env.lock_path().exists());
-        // Held (fresh): waits, and sees the marker appear.
+        let Lock::Held(first) = acquire_wait(env, Wait::Poll).unwrap() else {
+            panic!("free lock not taken");
+        };
+        // A separate open (another process in real life) can't take it while it is held.
+        let other = open_lock(env).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        assert!(matches!(acquire_wait(env, Wait::Poll).unwrap(), Lock::Busy));
+        drop(first);
+        // Released on drop, and the file is left alone (nothing to steal, nothing to clean up).
+        assert!(other.try_lock().is_ok());
+        assert!(env.lock_path().exists());
+    });
+}
+
+#[test]
+fn the_lock_loser_waits_for_the_marker_or_times_out() {
+    let sb = Sandbox::new();
+    sb.run_with("/x", |env| {
+        let held = open_lock(env).unwrap();
+        held.lock().unwrap();
+        // Held: waits, and sees the marker appear.
         let marker = env.marker();
         let sleep_then_marker = |_: Duration| {
             put(&marker, "done");
@@ -1059,19 +1247,32 @@ fn the_lock_loser_waits_for_the_marker() {
             sleep: &sleep_then_marker,
             ..clone_env(env)
         };
-        assert!(acquire_wait(&env2, Duration::from_secs(60))
-            .unwrap()
-            .is_none());
-        drop(g);
-        assert!(!env.lock_path().exists());
+        let wait = Wait::Block {
+            max: Duration::from_secs(60),
+            progress: false,
+        };
+        assert!(matches!(acquire_wait(&env2, wait).unwrap(), Lock::Done));
+        std::fs::remove_file(&marker).unwrap();
+        // The marker never comes: Busy after the full wait, which run_locked turns into the
+        // timeout error (a background poll just leaves the work to the holder).
+        let before = sb.sleeps.get();
+        let err = run_locked(env, wait).unwrap_err();
+        assert_eq!(err.code, MigrateError::LockTimeout);
+        assert_eq!(sb.sleeps.get() - before, 30);
+        assert_eq!(run_locked(env, Wait::Poll).unwrap(), Vec::<String>::new());
+        assert_eq!(sb.sleeps.get() - before, 30);
     });
-    // Held, and the marker never comes: a timeout with its code.
+}
+
+#[test]
+fn the_foreground_wait_covers_a_whole_legitimate_run() {
     let sb = Sandbox::new();
     sb.run_with("/x", |env| {
-        put(&env.lock_path(), "");
-        let err = acquire_wait(env, Duration::from_secs(60)).unwrap_err();
-        assert_eq!(err.code, MigrateError::LockTimeout);
-        assert_eq!(sb.sleeps.get(), 30);
+        let Wait::Block { max, progress } = foreground_wait(env) else {
+            panic!("foreground must block");
+        };
+        assert!(progress);
+        assert!(max >= env.quiet_timeout + Duration::from_secs(180));
     });
 }
 
@@ -1140,4 +1341,112 @@ fn the_flattening_is_the_one_the_keeper_module_documents() {
         crate::bisync_name::flatten(Path::new("/a/b/c")),
         flat(Path::new("/a/b/c"))
     );
+}
+
+// ---- failures are remembered, the Plasma panel entry ----
+
+#[test]
+fn a_plan_that_cannot_be_made_is_remembered_for_pending() {
+    let sb = Sandbox::new();
+    sb.seed_plasma(true);
+    sb.seed_cosmic(true);
+    sb.enable_old("cosmic-rclone-ui-offline.service");
+    let err = sb
+        .run_with("/new/bin/rclone-shell-ext", planned)
+        .unwrap_err();
+    assert_eq!(err.code, MigrateError::Ambiguous);
+    assert_eq!(
+        pending_in(&sb.config(), &sb.data(), &sb.state()),
+        MigrationStatus::Failed(MigrateError::Ambiguous)
+    );
+}
+
+/// The shape of a real `plasma-org.kde.plasma.desktop-appletsrc`: the plasmoid on a panel and in
+/// the system tray, listed in the tray's `extraItems` / `knownItems`.
+const APPLETSRC: &str = "\
+[Containments][2][Applets][32]
+immutability=1
+plugin=com.ca-peterson.rcloneplasma
+
+[Containments][2][Applets][32][Configuration]
+popupHeight=400
+
+[Containments][2][Applets][7][Applets][28]
+immutability=1
+plugin=org.kde.plasma.mediacontroller
+
+[Containments][2][Applets][7][Applets][35]
+immutability=1
+plugin=com.ca-peterson.rcloneplasma
+
+[Containments][2][Applets][7][Configuration][General]
+extraItems=org.kde.kdeconnect,org.kde.plasma.volume,com.ca-peterson.rcloneplasma
+knownItems=org.kde.kdeconnect,com.ca-peterson.rcloneplasma,org.kde.plasma.volume
+note=com.ca-peterson.rcloneplasmaX,xcom.ca-peterson.rcloneplasma
+";
+
+#[test]
+fn the_plasma_panel_entry_is_renamed_by_exact_token_only() {
+    let out = rename_plasmoid_id(APPLETSRC);
+    assert_eq!(
+        out.matches("com.ca-peterson.rclone-shell-ext").count(),
+        4,
+        "{out}"
+    );
+    assert!(out.contains("plugin=com.ca-peterson.rclone-shell-ext\n"));
+    assert!(out.contains(
+        "extraItems=org.kde.kdeconnect,org.kde.plasma.volume,com.ca-peterson.rclone-shell-ext\n"
+    ));
+    assert!(out.contains(
+        "knownItems=org.kde.kdeconnect,com.ca-peterson.rclone-shell-ext,org.kde.plasma.volume\n"
+    ));
+    // Near misses and other plugins are untouched; so is everything else, byte for byte.
+    assert!(out.contains("note=com.ca-peterson.rcloneplasmaX,xcom.ca-peterson.rcloneplasma\n"));
+    assert!(out.contains("plugin=org.kde.plasma.mediacontroller\n"));
+    assert_eq!(out.replace("rclone-shell-ext", "rcloneplasma"), APPLETSRC);
+    assert_eq!(rename_plasmoid_id(&out), out, "idempotent");
+}
+
+#[test]
+fn the_migration_rewrites_the_plasma_panel_entry_and_keeps_the_file_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sb = Sandbox::new();
+    let rc = sb.config().join(PLASMA_APPLETSRC);
+    put(&rc, APPLETSRC);
+    std::fs::set_permissions(&rc, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // Even with no old install at all: the old plasmoid id is gone.
+    sb.migrate().unwrap();
+    let text = std::fs::read_to_string(&rc).unwrap();
+    assert!(
+        !text.contains("plugin=com.ca-peterson.rcloneplasma")
+            && text.contains("plugin=com.ca-peterson.rclone-shell-ext\n")
+    );
+    assert_eq!(
+        std::fs::metadata(&rc).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    // No stray temp files.
+    assert_eq!(
+        names(&sb.config())
+            .iter()
+            .filter(|n| n.contains(".tmp"))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn a_panel_entry_that_cannot_be_rewritten_is_a_warning_not_a_failure() {
+    let sb = Sandbox::new();
+    let mut log = Vec::new();
+    sb.run_with("/x", |env| {
+        execute_step(
+            env,
+            &Step::RenamePlasmoid(sb.config().join("missing-appletsrc")),
+            &mut log,
+        )
+    })
+    .unwrap();
+    assert_eq!(log.len(), 1);
+    assert!(log[0].contains("missing-appletsrc"), "{log:?}");
 }

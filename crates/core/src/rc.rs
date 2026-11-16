@@ -420,6 +420,24 @@ fn rc_call<T: for<'de> Deserialize<'de>>(
     rc_post(agent, addr, auth, method, "{}")
 }
 
+/// Why an rc probe got no answer (see [`unfinished_jobs`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RcProbeError {
+    /// Nothing is listening on the rc address (connection refused).
+    NotRunning,
+    /// Anything else: a timeout, a 401, a reply that isn't JSON. rclone may well be running.
+    Other(String),
+}
+
+impl std::fmt::Display for RcProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RcProbeError::NotRunning => f.write_str("connection refused"),
+            RcProbeError::Other(e) => f.write_str(e),
+        }
+    }
+}
+
 fn rc_post<T: for<'de> Deserialize<'de>>(
     agent: &ureq::Agent,
     addr: &str,
@@ -427,6 +445,16 @@ fn rc_post<T: for<'de> Deserialize<'de>>(
     method: &str,
     body: &str,
 ) -> Result<T, String> {
+    rc_post_classified(agent, addr, auth, method, body).map_err(|e| e.to_string())
+}
+
+fn rc_post_classified<T: for<'de> Deserialize<'de>>(
+    agent: &ureq::Agent,
+    addr: &str,
+    auth: Option<&str>,
+    method: &str,
+    body: &str,
+) -> Result<T, RcProbeError> {
     let mut req = agent
         .post(&format!("http://{addr}/{method}"))
         .set("Content-Type", "application/json");
@@ -434,7 +462,9 @@ fn rc_post<T: for<'de> Deserialize<'de>>(
         req = req.set("Authorization", a);
     }
     match req.send_string(body) {
-        Ok(resp) => resp.into_json().map_err(|e| e.to_string()),
+        Ok(resp) => resp
+            .into_json()
+            .map_err(|e| RcProbeError::Other(e.to_string())),
         // rclone puts the reason in the JSON body of an error reply; keep it.
         Err(ureq::Error::Status(code, resp)) => {
             let reason = resp
@@ -442,12 +472,21 @@ fn rc_post<T: for<'de> Deserialize<'de>>(
                 .ok()
                 .and_then(|v| v.get("error")?.as_str().map(str::to_string))
                 .filter(|e| !e.is_empty());
-            Err(match reason {
+            Err(RcProbeError::Other(match reason {
                 Some(r) => format!("status code {code}: {r}"),
                 None => format!("status code {code}"),
+            }))
+        }
+        Err(ureq::Error::Transport(t)) if t.kind() == ureq::ErrorKind::ConnectionFailed => {
+            // ureq folds the cause into the message; only a refusal means "not running".
+            let refused = t.to_string().to_lowercase().contains("refused");
+            Err(if refused {
+                RcProbeError::NotRunning
+            } else {
+                RcProbeError::Other(t.to_string())
             })
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(RcProbeError::Other(e.to_string())),
     }
 }
 
@@ -457,11 +496,19 @@ pub fn rc_request(
     method: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    rc_request_classified(cfg, method, body).map_err(|e| e.to_string())
+}
+
+fn rc_request_classified(
+    cfg: &Config,
+    method: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, RcProbeError> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
         .build();
     let auth = auth_header(&cfg.env_file);
-    rc_post(
+    rc_post_classified(
         &agent,
         &cfg.rc_addr,
         auth.as_deref(),
@@ -471,25 +518,36 @@ pub fn rc_request(
 }
 
 /// How many rc jobs rclone is still running (the keeper's bisyncs are async jobs inside the
-/// mount's rclone, so stopping the keeper's unit doesn't stop them). `None` when rclone can't
-/// be reached, e.g. because the mount service is down: then there are no jobs.
+/// mount's rclone, so stopping the keeper's unit doesn't stop them).
+///
+/// # Errors
+/// [`RcProbeError::NotRunning`] when nothing listens (the mount service is down: no jobs);
+/// [`RcProbeError::Other`] when the answer is unknown (timeout, 401, bad JSON): the caller must
+/// not take that for "no jobs".
 ///
 /// TODO(integrator): `keeper::running_jobs` is the same query; switch it to this.
-pub fn unfinished_jobs(cfg: &Config) -> Option<usize> {
-    let list = rc_request(cfg, "job/list", &serde_json::json!({})).ok()?;
-    Some(
-        list.get("jobids")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_i64)
-            .filter(|id| {
-                rc_request(cfg, "job/status", &serde_json::json!({ "jobid": id })).is_ok_and(|s| {
-                    s.get("finished").and_then(serde_json::Value::as_bool) == Some(false)
-                })
+pub fn unfinished_jobs(cfg: &Config) -> Result<usize, RcProbeError> {
+    unfinished_jobs_with(&|method, body| rc_request_classified(cfg, method, body))
+}
+
+/// [`unfinished_jobs`] over any way of calling rc (tests inject one). A `job/status` that fails
+/// counts as an unfinished job: the job exists and we can't tell it is done.
+fn unfinished_jobs_with(
+    call: &dyn Fn(&str, &serde_json::Value) -> Result<serde_json::Value, RcProbeError>,
+) -> Result<usize, RcProbeError> {
+    let list = call("job/list", &serde_json::json!({}))?;
+    Ok(list
+        .get("jobids")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_i64)
+        .filter(|id| {
+            call("job/status", &serde_json::json!({ "jobid": id })).map_or(true, |s| {
+                s.get("finished").and_then(serde_json::Value::as_bool) != Some(true)
             })
-            .count(),
-    )
+        })
+        .count())
 }
 
 /// The rclone remote (e.g. `gdrive:`) mounted at `want`, from `/proc/mounts`-formatted text.
@@ -1344,6 +1402,57 @@ other: /home/u/Other fuse.sshfs rw 0 0
             ..cfg_for(&s)
         };
         assert!(rc_request(&down, "x", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn unfinished_jobs_distinguishes_no_jobs_from_unknown() {
+        use serde_json::json;
+        let jobs = |ids: serde_json::Value| {
+            move |m: &str, b: &serde_json::Value| -> Result<serde_json::Value, RcProbeError> {
+                match m {
+                    "job/list" => Ok(json!({ "jobids": ids })),
+                    // Job 1 is done, 2 is running, 3's status call fails, 4 has no field.
+                    _ => match b["jobid"].as_i64() {
+                        Some(1) => Ok(json!({"finished": true})),
+                        Some(2) => Ok(json!({"finished": false})),
+                        Some(4) => Ok(json!({})),
+                        _ => Err(RcProbeError::Other("status code 500".into())),
+                    },
+                }
+            }
+        };
+        assert_eq!(unfinished_jobs_with(&jobs(json!([]))), Ok(0));
+        assert_eq!(unfinished_jobs_with(&jobs(json!([1]))), Ok(0));
+        assert_eq!(unfinished_jobs_with(&jobs(json!([1, 2]))), Ok(1));
+        // A failing status or one without `finished` is not "done".
+        assert_eq!(unfinished_jobs_with(&jobs(json!([1, 3, 4]))), Ok(2));
+        // Nothing listening: the one case that means "no jobs".
+        let refused = |_: &str, _: &serde_json::Value| Err(RcProbeError::NotRunning);
+        assert_eq!(
+            unfinished_jobs_with(&refused),
+            Err(RcProbeError::NotRunning)
+        );
+        // Anything else is unknown.
+        let broken = |_: &str, _: &serde_json::Value| Err(RcProbeError::Other("401".into()));
+        assert_eq!(
+            unfinished_jobs_with(&broken),
+            Err(RcProbeError::Other("401".into()))
+        );
+    }
+
+    #[test]
+    fn a_refused_connection_is_not_running_but_a_401_is_unknown() {
+        let down = Config {
+            rc_addr: "127.0.0.1:1".into(),
+            env_file: "/nonexistent/rc.env".into(),
+            ..Config::default()
+        };
+        assert_eq!(unfinished_jobs(&down), Err(RcProbeError::NotRunning));
+        let s = FakeServer::start(vec![http_status("/job/list", 401)]);
+        assert!(matches!(
+            unfinished_jobs(&cfg_for(&s)),
+            Err(RcProbeError::Other(e)) if e.contains("401")
+        ));
     }
 
     const FS_MOUNTS: &str = "\

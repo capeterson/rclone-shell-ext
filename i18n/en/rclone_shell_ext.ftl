@@ -238,7 +238,7 @@ migrate-step-write = write { $path }
 migrate-step-remove = remove { $path }
 migrate-step-remove-dir = remove { $path } if empty
 migrate-note-other-left = an old { $origin } install was also found; it is left untouched
-migrate-note-config-kept = a new config.toml already exists; it is kept as is
+migrate-note-config-merged = a config.toml already existed; the old settings were merged into it (the old values win)
 migrate-note-old-config-left = the old config file is left in place (delete it when you are happy)
 migrate-error-ambiguous = both the old COSMIC and the old Plasma installs have offline folders set up, and it isn't clear which one is in use; turn offline folders off in the one you don't use, then try again
 migrate-error-conflict = { $path } already exists and isn't empty, so the old data can't be moved there; move it aside or remove it, then try again. Nothing was changed.
@@ -262,9 +262,14 @@ migrate-error-sync-in-flight =
        *[other] { $count } syncs
     } started by the old install, so nothing was moved. The old offline-folder service was put back; try again in a few minutes.
 migrate-error-mount-in-use = { $path } is still mounted by the old install, so nothing was moved. The old offline-folder service was put back; try again in a few minutes.
-migrate-error-lock-timeout = another rclone-shell-ext process has been migrating for over a minute; try again in a moment
+migrate-error-lock-timeout = another rclone-shell-ext process has been migrating for too long; try again in a moment
+migrate-waiting-lock = rclone-shell-ext: another process is moving the old install; waiting for it…
 migrate-error-old-install-present = An old cosmic-rclone-ui or rclone-plasma install hasn't been moved over yet. Run `rclone-shell-ext --migrate` first.
 migrate-error-dev-build = the dev build never migrates; use the installed rclone-shell-ext
+migrate-error-sync-unknown = rclone's job list couldn't be read (it answered with an error), so it isn't known whether a sync is still running, and nothing was moved. The old offline-folder service was put back; try again in a few minutes.
+migrate-error-step-restored = step { $number } of { $total } ({ $step }) failed: { $error }. Nothing was moved, and the old offline-folder service was put back.
+migrate-error-restore-failed = { $message } The old offline-folder service could not be fully put back ({ $errors }); run `systemctl --user enable --now` on it yourself.
+migrate-log-panel-kept = couldn't update the Plasma panel entry in { $path }: { $error }. Remove and add the rclone widget again if it is missing.
 migrate-log-dir-kept = couldn't remove the directory { $path }: { $error }
 migrate-label-pending = Moving your old offline-folder setup…
 migrate-label-ambiguous = The old COSMIC and Plasma installs both use offline folders; turn them off in one and try again
