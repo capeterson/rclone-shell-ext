@@ -64,6 +64,10 @@ just plasma::install-user   # Plasma: plasmoid, D-Bus service, Kirigami windows,
 Everything goes under `~/.local`. After a Plasma install, restart Dolphin with `QT_PLUGIN_PATH`
 set to `~/.local/lib64/qt6/plugins` (Plasma sets it from the next login).
 
+The Plasma widget is a standalone panel widget; add “rclone UI” through Plasma's widget
+explorer. It is not a system-tray item. If you previously used it in the tray, add it to the
+panel after upgrading.
+
 **One-time migration.** Both recipes run `rclone-shell-ext --migrate` in the foreground. If you
 used the earlier per-shell versions (`cosmic-rclone-ui`, `rclone-plasma`) it moves that install
 to the shared identity: it stops the old offline-folder services, moves the local offline copies
