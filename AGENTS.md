@@ -31,8 +31,9 @@ Every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`. No literals i
 - Share an id when the meaning and grammatical role are the same, not just the English text: a
   state ("Uploading"), a row label and a headline are separate ids even if they read the same.
 - Ids are kebab-case with a surface prefix (`health-`, `panel-`, `details-`, `settings-`,
-  `offline-`, `share-`, `drive-`, `cli-`, `common-`; `cosmic-`/`plasma-`/`dolphin-` only for
-  shell-only controls). Reuse an existing message before adding one; change wording in one place.
+  `offline-`, `backup-`, `share-`, `drive-`, `cli-`, `common-`; `cosmic-`/`plasma-`/`dolphin-`
+  only for shell-only controls). Reuse an existing message before adding one; change wording in
+  one place.
 - Not user-visible (logs, D-Bus enum values, debug output)? Literal is fine. A false positive in
   the sync test gets `// i18n-ignore: <reason>`, not a weaker test.
 - `cargo test -p rclone-ui-i18n` runs the sync check.

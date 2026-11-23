@@ -29,6 +29,21 @@ pub struct Config {
     pub pins: Vec<String>,
     /// How often each offline folder is synced with the remote when nothing changes locally.
     pub sync_interval_secs: u64,
+    /// How often every backed-up folder is mirrored.
+    pub backup_interval_secs: u64,
+    /// Local folders mirrored to the remote's `Computers/<host>/` folder (see `backup`). Last:
+    /// TOML writes arrays of tables after every plain value.
+    pub backup_folders: Vec<BackupFolder>,
+}
+
+/// One backed-up local folder and the remote folder it is mirrored to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupFolder {
+    /// Absolute local path.
+    pub source: String,
+    /// rclone path, e.g. `gdrive:Computers/laptop/Documents`.
+    pub destination: String,
 }
 
 impl Default for Config {
@@ -43,6 +58,8 @@ impl Default for Config {
             offline_enabled: false,
             pins: Vec::new(),
             sync_interval_secs: 300,
+            backup_interval_secs: 3600,
+            backup_folders: Vec::new(),
         }
     }
 }

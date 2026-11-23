@@ -62,14 +62,16 @@ const USER_ENTRY: &str =
     r#"[(name: "Compress", confirm: false, selection: Folders, steps: ["tar czf %f.tgz %f"])]"#;
 
 #[test]
-fn menu_install_adds_one_entry_that_runs_this_binary() {
+fn menu_install_adds_the_menu_and_backup_entries_that_run_this_binary() {
     let sb = Sandbox::new("install");
     let out = sb.run(&["--menu-install"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = sb.actions();
-    assert_eq!(text.matches("name:").count(), 1, "{text}");
+    assert_eq!(text.matches("name:").count(), 2, "{text}");
     assert!(text.contains("rclone…"), "{text}");
     assert!(text.contains("--menu %F"), "{text}");
+    assert!(text.contains("--backup %F"), "{text}");
+    assert!(text.contains("selection: Folders"), "{text}");
     assert!(text.contains("rclone-shell-ext-cosmic"), "{text}");
 }
 
@@ -99,6 +101,7 @@ fn menu_install_and_remove_leave_the_users_own_entries_alone() {
     let text = sb.actions();
     assert!(text.contains("Compress"), "{text}");
     assert!(!text.contains("rclone…"), "{text}");
+    assert!(!text.contains("--backup"), "{text}");
 }
 
 #[test]

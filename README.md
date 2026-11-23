@@ -104,14 +104,17 @@ Defaults (stored in `~/.config/rclone-shell-ext/config.toml`, shared by both fro
 | `service` | `rclone-gdrive.service` |
 | `mount_path` | `~/GoogleDrive` |
 | `cache_dir` | `~/.cache/rclone` (rclone's `--cache-dir`; read for per-file cache status) |
-| `context_menu` | `true` (add the "rclone…" entry to COSMIC Files' right-click menu) |
+| `context_menu` | `true` (add the "rclone…" and "Back up to Drive" entries to COSMIC Files' right-click menu) |
 | `offline_enabled` | `false` (offline folders; switch on in Settings) |
 | `pins` | `[]` (folders kept offline, relative to the mount) |
 | `sync_interval_secs` | `300` (how often offline folders sync when nothing changes locally) |
+| `backup_interval_secs` | `3600` (how often backed-up folders are mirrored) |
+| `backup_folders` | `[]` (`[[backup_folders]]` tables with `source` and `destination`; managed from the right-click menu and Settings) |
 
-The settings window (`--settings`, or the gear in the popup) covers offline folders and the
-right-click menu entry. Plasma's plasmoid configuration page edits the connection settings
-(`rc_addr`, `env_file`, `service`, `mount_path`, `cache_dir`, `sync_interval_secs`).
+The settings window (`--settings`, or the gear in the popup) covers offline folders, folder
+backups and the right-click menu entry. Plasma's plasmoid configuration page edits the
+connection settings (`rc_addr`, `env_file`, `service`, `mount_path`, `cache_dir`,
+`sync_interval_secs`).
 
 ## Offline folders
 
@@ -170,6 +173,39 @@ See [Known limits](#known-limits) for what offline folders can't do.
 
 Command-line control of offline folders: see [Command line](#command-line).
 
+## Folder backups
+
+Back up any local folder, wherever it is on the system, to Drive: right-click it in COSMIC Files
+and choose **Back up to Drive** (Dolphin: **rclone** → **Back up to Drive**), or use **Back up a
+folder…** in Settings. A notification confirms where it goes.
+
+- **Where:** `<remote>:Computers/<hostname>/<folder name>`, e.g. `gdrive:Computers/nixie/Documents`,
+  with ` (2)`… added when that name is already taken. The remote is the one your mount uses.
+  This is a normal `Computers` folder at the top of **My Drive**, not Google's **Computers** tab:
+  Google has no public API for that tab (only Drive for desktop on Windows/macOS can create
+  computers there, and their top-level folders are read-only to rclone; see
+  [rclone's notes](https://rclone.org/drive/#root-folder-id)).
+- **Mirror:** each folder is synced one way with `rclone sync`, so the backup ends up exactly
+  like the folder: files you delete or rename locally are deleted or renamed in the backup too.
+  Google Drive moves deleted files to its trash (kept 30 days), so a mistaken delete can be
+  recovered from there. An **empty** folder is never mirrored (it is most likely a disk that
+  isn't connected), and the Drive mount, rclone's cache and this app's own folders are left out
+  when a backed-up folder contains them. Symlinks are skipped.
+- **When:** the `rclone-shell-ext-backup.service` user unit (installed and enabled with the
+  first backup, removed with the last) mirrors every folder when it starts, right after the list
+  changes, and then every `backup_interval_secs`. It runs the `rclone` command with rclone's
+  default config, independently of the mount, so backups continue while the mount is stopped.
+  Its log: `journalctl --user -u rclone-shell-ext-backup`.
+- **Stop backing up** (right-click or Settings) leaves the copy in Drive as it is.
+- **Restore:** Settings → **Restore a backup** → **Find backups in Drive** lists the backups of
+  every machine under `Computers/`. **Restore to…** downloads one into any local folder you pick
+  (files already there are kept unless the backup has a newer copy); with **Keep backing up the
+  restored folder**, that folder is then backed up to the same place, which is how you move a
+  backup to a new machine or path. A restore runs in the background and notifies when done.
+
+Adding a backup needs the mount running once (to learn the remote's name); after that, backups
+and restores use rclone directly.
+
 ## Details window
 
 Right-click a file or folder in COSMIC Files and choose **rclone…** (in Dolphin: **rclone** →
@@ -205,11 +241,14 @@ The shared `rclone-shell-ext` binary (`rclone-shell-ext --help`, or any unrecogn
 | `--status [--rc-addr HOST:PORT]` | prints one status snapshot without any panel |
 | `--share-url PATH` / `--share-open PATH` | prints / opens the Manage Sharing link for an item in the mount |
 | `--pin PATH` / `--unpin PATH` / `--pins` | keep a folder offline, stop doing so, list offline folders |
+| `--backup PATH...` / `--backup-remove PATH...` | start or stop backing up folders (also notifies) |
+| `--backup-restore REMOTE-PATH LOCAL-PATH [--link]` | restore a backup, optionally keep backing up from there |
+| `--backups [--remote]` | list this machine's backups, or every backup in Drive |
 | `--offline-repair FOLDER` | ask the keeper to rebuild a folder's sync baseline |
 | `--offline-remove` | remove the offline-folder services (refuses while folders are pinned) |
 | `--migrate [--dry-run]` | move an old `cosmic-rclone-ui` / `rclone-plasma` install over |
 | `--plasma-panel-rename [--dry-run]` | rename the old plasmoid in plasmashell's applet list (refuses while plasmashell runs) |
-| `--offline-keeper`, `--pin-mount ID`, `--pin-unmount ID` | run by the systemd units; not for typing |
+| `--offline-keeper`, `--pin-mount ID`, `--pin-unmount ID`, `--backup-keeper` | run by the systemd units; not for typing |
 
 The front-end binaries add their own modes (`rclone-shell-ext-plasma --daemon`, `--menu PATH`,
 `--settings`, `--status --json`; `rclone-shell-ext-cosmic --settings`, `--menu PATH`, ...).

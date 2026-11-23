@@ -2,6 +2,7 @@
 //! Toolkit-free presentation model behind the windows and panels: what to show and which buttons apply. Everything
 //! here is plain Rust so it can be unit tested without a Qt event loop.
 
+pub mod backup;
 pub mod details;
 pub mod history;
 pub mod panel;

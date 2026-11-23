@@ -6,6 +6,8 @@
 #include <KPluginFactory>
 
 #include <QAction>
+#include <QDir>
+#include <QFileInfo>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -46,6 +48,24 @@ QSet<QString> parsePins(const QString &statusJson)
     }
     return pins;
 }
+
+// Is `path` itself one of the backed-up folders in the GetConfig JSON? The config keeps sources
+// absolute with symlinks resolved, so the folder is compared both as shown and resolved. A folder
+// inside a backed-up one is not a match: removing it would fail, and adding it is refused by the
+// CLI with a notification that says why.
+bool isBackedUp(const QString &configJson, const QString &path)
+{
+    const QString shown = QDir::cleanPath(path);
+    const QString resolved = QFileInfo(path).canonicalFilePath();
+    const auto folders = QJsonDocument::fromJson(configJson.toUtf8()).object().value(QLatin1String("backup_folders")).toArray();
+    for (const auto &v : folders) {
+        const QString source = QDir::cleanPath(v.toObject().value(QLatin1String("source")).toString());
+        if (!source.isEmpty() && (source == shown || source == resolved)) {
+            return true;
+        }
+    }
+    return false;
+}
 }
 
 RcloneFileItemAction::RcloneFileItemAction(QObject *parent, const QVariantList &)
@@ -54,33 +74,46 @@ RcloneFileItemAction::RcloneFileItemAction(QObject *parent, const QVariantList &
 {
 }
 
+QAction *RcloneFileItemAction::submenu(QWidget *parentWidget, QMenu **menu)
+{
+    auto *menuAction = new QAction(QIcon::fromTheme(QStringLiteral("com.ca-peterson.rclone-shell-ext")), m_client->text("dolphin-menu"), parentWidget);
+    *menu = new QMenu(parentWidget);
+    menuAction->setMenu(*menu);
+    return menuAction;
+}
+
 QList<QAction *> RcloneFileItemAction::actions(const KFileItemListProperties &fileItemInfos, QWidget *parentWidget)
 {
     const KFileItemList items = fileItemInfos.items();
     if (items.isEmpty()) {
         return {};
     }
-    // Cheap pre-filter before touching D-Bus: only local files can be under the mount.
+    // Cheap pre-filter before touching D-Bus: only local files can be under the mount or backed up.
     for (const KFileItem &item : items) {
         if (!item.url().isLocalFile()) {
             return {};
         }
     }
-    if (m_client->ensureMountPath(kDbusTimeoutMs).isEmpty()) {
-        return {};
-    }
+    // Without a daemon the mount path is unknown and everything counts as outside it; the CLI
+    // refuses to back up a folder in the mount.
+    m_client->ensureMountPath(kDbusTimeoutMs);
     QStringList paths;
+    bool inside = false;
+    bool outside = false;
     for (const KFileItem &item : items) {
         const QString path = item.url().toLocalFile();
-        if (!m_client->isUnderMount(path)) {
-            return {};
-        }
+        (m_client->isUnderMount(path) ? inside : outside) = true;
         paths << path;
     }
+    if (inside && outside) {
+        return {};
+    }
+    if (outside) {
+        return backupActions(items.first(), items.size(), parentWidget);
+    }
 
-    auto *menuAction = new QAction(QIcon::fromTheme(QStringLiteral("com.ca-peterson.rclone-shell-ext")), m_client->text("dolphin-menu"), parentWidget);
-    auto *menu = new QMenu(parentWidget);
-    menuAction->setMenu(menu);
+    QMenu *menu = nullptr;
+    QAction *menuAction = submenu(parentWidget, &menu);
 
     QAction *details = menu->addAction(QIcon::fromTheme(QStringLiteral("document-properties")), m_client->text("dolphin-details"));
     connect(details, &QAction::triggered, this, [paths]() {
@@ -116,6 +149,32 @@ QList<QAction *> RcloneFileItemAction::actions(const KFileItemListProperties &fi
         });
     }
 
+    return {menuAction};
+}
+
+QList<QAction *> RcloneFileItemAction::backupActions(const KFileItem &item, qsizetype count, QWidget *parentWidget)
+{
+    // Outside the mount only a single folder has an action: backing it up (or stopping).
+    if (count != 1 || !item.isDir()) {
+        return {};
+    }
+    const QString path = item.url().toLocalFile();
+    // An empty reply (no daemon) offers "Back up to Drive"; the CLI says if it already is.
+    const bool backedUp = isBackedUp(m_client->callStringBlocking(QStringLiteral("GetConfig"), kDbusTimeoutMs), path);
+
+    QMenu *menu = nullptr;
+    QAction *menuAction = submenu(parentWidget, &menu);
+    if (backedUp) {
+        QAction *remove = menu->addAction(QIcon::fromTheme(QStringLiteral("list-remove")), m_client->text("backup-menu-remove"));
+        connect(remove, &QAction::triggered, this, [path]() {
+            launch({QStringLiteral("--backup-remove"), path});
+        });
+    } else {
+        QAction *add = menu->addAction(QIcon::fromTheme(QStringLiteral("folder-cloud")), m_client->text("backup-menu-add"));
+        connect(add, &QAction::triggered, this, [path]() {
+            launch({QStringLiteral("--backup"), path});
+        });
+    }
     return {menuAction};
 }
 

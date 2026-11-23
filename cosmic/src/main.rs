@@ -39,12 +39,12 @@ fn main() -> cosmic::iced::Result {
     if let Some(i) = args.iter().position(|a| a == "--menu") {
         return menu::run(config::Config::load(), args[i + 1..].to_vec());
     }
-    // `--menu-install` adds it (the applet also does this on start-up).
+    // `--menu-install` adds it and "Back up to Drive" (the applet also does this on start-up).
     if args.iter().any(|a| a == "--menu-install") {
         context_menu::install();
         return Ok(());
     }
-    // `--menu-remove` takes the applet's entry back out of the COSMIC Files right-click menu.
+    // `--menu-remove` takes the applet's entries back out of the COSMIC Files right-click menu.
     if args.iter().any(|a| a == "--menu-remove") {
         context_menu::remove();
         return Ok(());

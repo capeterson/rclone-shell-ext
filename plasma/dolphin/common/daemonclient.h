@@ -37,6 +37,9 @@ public:
     /// Blocking property read with a short timeout, for callers that must answer synchronously
     /// (e.g. a context-menu plugin instantiated per menu). Empty on error/timeout.
     QString getPropertyBlocking(const QString &name, int timeoutMs);
+    /// Blocking call of a no-argument method that returns a string (e.g. GetConfig), with the
+    /// same short timeout and back-off as getPropertyBlocking. Empty on error/timeout.
+    QString callStringBlocking(const QString &method, int timeoutMs);
     /// Start fetching the daemon's Strings() asynchronously into the per-process cache, so the
     /// first context menu usually finds it warm. Does nothing once cached or while in flight.
     static void prefetchStrings();

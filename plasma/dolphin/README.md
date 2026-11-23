@@ -4,11 +4,13 @@ Two KF6 plugins that talk to the rclone-shell-ext-plasma daemon over the session
 (see `../docs/dbus-interface.md`):
 
 - `rcloneoverlayplugin` (`kf6/overlayicon`): sync-state emblems on files in the mount.
-- `rclonefileitemaction` (`kf6/kfileitemaction`): "rclone" context submenu
-  (Details, Keep offline / Stop keeping offline, Manage Sharing).
+- `rclonefileitemaction` (`kf6/kfileitemaction`): "rclone" context submenu. In the mount:
+  Details, Keep offline / Stop keeping offline, Manage Sharing. On a single local folder
+  outside the mount: Back up to Drive, or Stop backing up if that folder is backed up.
 
-Both are non-blocking: all D-Bus traffic is asynchronous, and after a failed call
-the client stays quiet for 10 s.
+The overlay plugin never blocks: its D-Bus traffic is asynchronous. The action plugin must
+answer as the menu opens, so it asks the daemon with blocking calls of at most 300 ms. After a
+failed call, either client stays quiet for 10 s.
 
 ## Build
 

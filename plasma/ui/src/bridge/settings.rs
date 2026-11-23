@@ -2,14 +2,18 @@
 //! `SettingsModel`: the `QObject` behind `Settings.qml`. The offline-folders toggle flow lives in
 //! [`rclone_ui_view::settings`]; this file runs its worker steps on threads (the setup includes the
 //! system password prompt) and mirrors the state into properties. Refreshes every [`REFRESH`].
+//! The Backups and Restore sections show [`rclone_ui_view::backup`] rows; adding, removing and
+//! listing backups run on threads too (systemctl, rclone).
 
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{QString, QUrl};
+use rclone_ui_core::backup as core_backup;
 use rclone_ui_core::config::{self, Config};
 use rclone_ui_core::offline_setup::{set_up, tear_down, turn_on, Checks};
 use rclone_ui_core::pin::{self, OfflineState};
 use rclone_ui_core::{keeper, share};
+use rclone_ui_view::backup;
 use rclone_ui_view::settings::{ConsentAction, SettingsState, SettingsView, ToggleAction};
 use rclone_ui_view::REFRESH;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +23,8 @@ pub mod qobject {
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+        include!("cxx-qt-lib/qurl.h");
+        type QUrl = cxx_qt_lib::QUrl;
     }
 
     #[auto_cxx_name]
@@ -44,6 +50,16 @@ pub mod qobject {
         #[qproperty(bool, context_menu)]
         #[qproperty(QString, error)]
         #[qproperty(QString, note)]
+        // Backups: the section's description (names the remote folder), `backup::rows_json`,
+        // and whether an add or remove is running.
+        #[qproperty(QString, backup_description)]
+        #[qproperty(QString, backups_json)]
+        #[qproperty(bool, backup_busy)]
+        // Restore: `backup::restore_rows_json`, the list is being fetched, and it was fetched
+        // at least once (so an empty list means there are none).
+        #[qproperty(QString, restore_json)]
+        #[qproperty(bool, restore_loading)]
+        #[qproperty(bool, restore_loaded)]
         type SettingsModel = super::SettingsModelRust;
 
         /// Load the settings and start the periodic refresh.
@@ -82,6 +98,32 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "saveContextMenu"]
         fn save_context_menu(self: Pin<&mut SettingsModel>, on: bool);
+
+        /// Start backing up a folder picked in the folder dialog.
+        #[qinvokable]
+        #[cxx_name = "addBackup"]
+        fn add_backup(self: Pin<&mut SettingsModel>, folder: &QUrl);
+
+        /// Stop backing up a folder (the copy in Drive is kept).
+        #[qinvokable]
+        #[cxx_name = "stopBackup"]
+        fn stop_backup(self: Pin<&mut SettingsModel>, source: &QString);
+
+        /// List every machine's backups in Drive (in the background).
+        #[qinvokable]
+        #[cxx_name = "findBackups"]
+        fn find_backups(self: Pin<&mut SettingsModel>);
+
+        /// Restore the backup at `destination` into a folder picked in the folder dialog, and
+        /// with `link` keep backing that folder up.
+        #[qinvokable]
+        #[cxx_name = "restoreBackup"]
+        fn restore_backup(
+            self: Pin<&mut SettingsModel>,
+            destination: &QString,
+            folder: &QUrl,
+            link: bool,
+        );
     }
 
     impl cxx_qt::Threading for SettingsModel {}
@@ -107,6 +149,12 @@ pub struct SettingsModelRust {
     context_menu: bool,
     error: QString,
     note: QString,
+    backup_description: QString,
+    backups_json: QString,
+    backup_busy: bool,
+    restore_json: QString,
+    restore_loading: bool,
+    restore_loaded: bool,
     /// Only touched on the Qt thread.
     state: Option<SettingsState>,
 }
@@ -133,6 +181,12 @@ impl Default for SettingsModelRust {
             context_menu: true,
             error: empty(),
             note: empty(),
+            backup_description: empty(),
+            backups_json: QString::from("[]"),
+            backup_busy: false,
+            restore_json: QString::from("[]"),
+            restore_loading: false,
+            restore_loaded: false,
             state: None,
         }
     }
@@ -167,6 +221,44 @@ fn run_worker(
             s.finish(result, cfg);
             s.checks = checks;
             s.state = state;
+        });
+    });
+}
+
+/// The Backups rows for `cfg`, with the keeper's last recorded status.
+fn backup_rows(cfg: &Config) -> String {
+    // No status yet (the keeper never ran) or unreadable: the rows say "Not backed up yet".
+    let status = core_backup::status().unwrap_or_default();
+    backup::rows_json(&backup::rows(cfg, &status, now()))
+}
+
+/// A new backup action replaces the outcome of the last change.
+fn clear_messages(s: &mut SettingsState) {
+    s.error = None;
+    s.note = None;
+}
+
+/// Add or remove a backup on a worker (it installs or removes the backup unit with
+/// systemctl), then show the new list and any failure.
+fn run_backup_worker(
+    qt: CxxQtThread<Model>,
+    work: impl FnOnce() -> Result<(), String> + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let result = work();
+        let cfg = config::store().load();
+        let rows = backup_rows(&cfg);
+        let _ = qt.queue(move |mut model| {
+            model.as_mut().set_backup_busy(false);
+            model
+                .as_mut()
+                .set_backups_json(QString::from(rows.as_str()));
+            model.update(move |s| {
+                if let Err(code) = result {
+                    s.error = Some(backup::error(&code));
+                }
+                s.apply_config(cfg);
+            });
         });
     });
 }
@@ -220,10 +312,15 @@ impl qobject::SettingsModel {
         if self.rust().state.is_some() {
             return;
         }
-        let state = SettingsState::new(config::store().load());
+        let cfg = config::store().load();
+        let rows = backup_rows(&cfg);
+        let state = SettingsState::new(cfg);
         let view = state.view(now());
         self.as_mut().rust_mut().get_mut().state = Some(state);
         self.as_mut().show(&view);
+        self.as_mut()
+            .set_backup_description(QString::from(backup::description().as_str()));
+        self.as_mut().set_backups_json(QString::from(rows.as_str()));
 
         let qt = self.qt_thread();
         std::thread::spawn(move || loop {
@@ -231,12 +328,20 @@ impl qobject::SettingsModel {
             let cfg = config::store().load();
             let checks = Checks::probe(&cfg);
             let state = OfflineState::load();
-            let alive = post(&qt, move |s| {
-                s.checks = checks;
-                s.state = state;
-                // Ignored while a setup runs or its consent is open: our copy is the truth.
-                s.apply_config(cfg);
-            });
+            let rows = backup_rows(&cfg);
+            let alive = qt
+                .queue(move |mut model| {
+                    model
+                        .as_mut()
+                        .set_backups_json(QString::from(rows.as_str()));
+                    model.update(move |s| {
+                        s.checks = checks;
+                        s.state = state;
+                        // Ignored while a setup runs or its consent is open: our copy is the truth.
+                        s.apply_config(cfg);
+                    });
+                })
+                .is_ok();
             if !alive {
                 return;
             }
@@ -302,6 +407,82 @@ impl qobject::SettingsModel {
             match config::store().save(&mut |c: &mut Config| c.context_menu = on) {
                 Ok(cfg) => s.cfg = cfg,
                 Err(e) => s.error = Some(e),
+            }
+        });
+    }
+
+    /// Start an add or remove unless one is running.
+    fn start_backup_work(
+        mut self: Pin<&mut Self>,
+        work: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) {
+        if *self.backup_busy() {
+            return;
+        }
+        self.as_mut().set_backup_busy(true);
+        self.as_mut().with_state(clear_messages);
+        run_backup_worker(self.qt_thread(), work);
+    }
+
+    pub fn add_backup(self: Pin<&mut Self>, folder: &QUrl) {
+        // The folder dialog can hand back a remote (KIO) location; only local folders back up.
+        let Some(source) = folder.to_local_file().map(|p| p.to_string()) else {
+            self.with_state(|s| {
+                clear_messages(s);
+                s.error = Some(backup::error("invalid-source"));
+            });
+            return;
+        };
+        self.start_backup_work(move || core_backup::add(&source).map(drop));
+    }
+
+    pub fn stop_backup(self: Pin<&mut Self>, source: &QString) {
+        let source = source.to_string();
+        self.start_backup_work(move || core_backup::remove(&source).map(drop));
+    }
+
+    pub fn find_backups(mut self: Pin<&mut Self>) {
+        if *self.restore_loading() {
+            return;
+        }
+        self.as_mut().set_restore_loading(true);
+        self.as_mut().with_state(clear_messages);
+        let qt = self.qt_thread();
+        // `rclone lsf` over every machine's folder: seconds, so never on the Qt thread.
+        std::thread::spawn(move || {
+            let rows = core_backup::list_remote()
+                .map(|list| backup::restore_rows_json(&backup::restore_rows(&list)));
+            let _ = qt.queue(move |mut model| {
+                model.as_mut().set_restore_loading(false);
+                match rows {
+                    Ok(json) => {
+                        model
+                            .as_mut()
+                            .set_restore_json(QString::from(json.as_str()));
+                        model.as_mut().set_restore_loaded(true);
+                    }
+                    Err(code) => {
+                        model.as_mut().set_restore_json(QString::from("[]"));
+                        model.as_mut().set_restore_loaded(false);
+                        model.update(|s| s.error = Some(backup::error(&code)));
+                    }
+                }
+            });
+        });
+    }
+
+    pub fn restore_backup(self: Pin<&mut Self>, destination: &QString, folder: &QUrl, link: bool) {
+        let destination = destination.to_string();
+        let target = folder.to_local_file().map(|p| p.to_string());
+        self.with_state(|s| {
+            clear_messages(s);
+            // Only starts the separate restore process, which notifies when it is done.
+            let started = target
+                .ok_or_else(|| "invalid-source".to_string())
+                .and_then(|t| core_backup::spawn_restore(&destination, &t, link).map(|()| t));
+            match started {
+                Ok(t) => s.note = Some(backup::restore_started(&t)),
+                Err(code) => s.error = Some(backup::error(&code)),
             }
         });
     }

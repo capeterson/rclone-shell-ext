@@ -106,7 +106,7 @@ settings-window-title = rclone settings
 settings-heading-general = General
 settings-heading-activity = Recent offline activity
 settings-keep-offline-switch = Keep folders available offline
-cosmic-settings-context-menu = Show “rclone…” in the Files right-click menu
+cosmic-settings-context-menu = Show “rclone…” and “Back up to Drive” in the Files right-click menu
 settings-step-done = Done
 settings-step-todo = To do
 settings-setting-up = Setting up…
@@ -116,6 +116,20 @@ settings-no-pins = No folders are kept offline yet
 cosmic-settings-no-pins-hint = In Files, right-click a folder in the Drive folder, choose “rclone…”, then “Keep offline”.
 settings-consent-title = Turn on offline folders?
 settings-consent-intro = Keeping folders offline needs these changes. Nothing has been changed yet.
+settings-heading-backups = Backups
+settings-backup-description = Folders backed up to { $folder } in Drive. A backup mirrors its folder: files you delete are deleted from the backup too (Google Drive keeps them in its trash for 30 days).
+settings-backup-none = No folders are backed up yet. Right-click a folder in the file manager and choose Back up to Drive, or add one here.
+settings-backup-add = Back up a folder…
+settings-backup-choose = Choose a folder to back up
+settings-restore-heading = Restore a backup
+settings-restore-load = Find backups in Drive
+settings-restore-loading = Looking for backups…
+settings-restore-none = No backups found in Drive
+settings-restore-row = { $host } / { $folder }
+settings-restore-button = Restore to…
+settings-restore-choose = Choose where to restore the backup
+settings-restore-link = Keep backing up the restored folder
+settings-restore-started = Restoring to { $folder } in the background; a notification says when it's done.
 
 ## offline-: offline folders (phases, consent, setup steps, keeper messages)
 
@@ -332,8 +346,43 @@ drive-err-token-unreadable = rclone's token is unreadable
 drive-err-denied = Google Drive denied access to this item
 drive-err-not-found = Google Drive can't find this item
 
+## backup-: folder backups to Computers/<host> (notifications, labels, errors)
+
+backup-heading = Backups
+backup-menu-add = Back up to Drive
+backup-menu-remove = Stop backing up
+backup-notify-added = Backing up { $folder } to { $destination }
+backup-notify-removed = Stopped backing up { $folder }. The copy in { $destination } is kept.
+backup-notify-failed = Couldn't change the backup of { $folder }: { $error }
+backup-notify-restored = Restored { $destination } to { $folder }
+backup-notify-restored-linked = Restored { $destination } to { $folder }; it is backed up from there now
+backup-notify-restore-failed = Couldn't restore { $destination } to { $folder }: { $error }
+backup-status-running = Backing up…
+backup-status-pending = Not backed up yet
+backup-status-done = Backed up { $when }
+backup-error-invalid-source = Not a local folder path
+backup-error-source-missing = The folder doesn't exist (a disk that isn't connected?)
+backup-error-source-empty = The folder is empty, so it wasn't mirrored (a disk that isn't connected?)
+backup-error-source-overlap = Overlaps another backed-up folder or the app's own folders
+backup-error-source-in-mount = Folders in the Drive folder are already in Drive
+backup-error-already-backed-up = This folder is already backed up
+backup-error-not-backed-up = This folder isn't backed up
+backup-error-invalid-destination = Not a valid backup location
+backup-error-destination-overlap = Another folder is already backed up there
+backup-error-remote-unknown = The Drive mount isn't running, so the remote to back up to is unknown
+backup-error-rclone-unavailable = rclone couldn't be started
+backup-error-copy-failed = rclone failed; the backup service's journal has the details
+backup-error-list-failed = Couldn't list the backups in Drive
+backup-error-interrupted = The last backup was interrupted
+backup-error-config-unreadable = The settings file can't be read
+backup-error-service-failed = The backup service couldn't be started
+backup-error-unknown = Backup failed
+
 ## cli-: output of the shared `rclone-shell-ext` command line
 
+cli-backup-line = { $folder } -> { $destination }
+cli-backup-none = No folders are backed up
+cli-backup-remote-line = { $destination }
 cli-usage =
     usage: rclone-shell-ext MODE
       --status [--rc-addr HOST:PORT]
@@ -341,6 +390,9 @@ cli-usage =
       --pin PATH | --unpin PATH | --pins
       --offline-repair FOLDER | --offline-remove
       --offline-keeper | --pin-mount ID | --pin-unmount ID   (run by the systemd units)
+      --backup PATH | --backup-remove PATH | --backups
+      --backup-restore REMOTE-PATH LOCAL-PATH [--link]
+      --backup-keeper                                         (run by the backup unit)
       --migrate [--dry-run]    move an old cosmic-rclone-ui / rclone-plasma install over
       --plasma-panel-rename [--dry-run]   rename the old plasmoid in the Plasma panel (plasmashell stopped)
 cli-usage-plasma =

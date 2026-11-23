@@ -17,7 +17,8 @@ tokio.workspace = true
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
 default-features = false
-features = ["applet", "dbus-config", "multi-window", "tokio", "wayland", "winit"]
+# xdg-portal: the settings window's folder picker (`cosmic::dialog::file_chooser`).
+features = ["applet", "dbus-config", "multi-window", "tokio", "wayland", "winit", "xdg-portal"]
 
 [lints]
 workspace = true

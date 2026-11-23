@@ -4,11 +4,12 @@ One repository, one shared rclone integration, and thin desktop-shell front ends
 
 ```
 crates/core   rclone-ui-core    talking to rclone: rc client, status, config model + store,
-                                offline folders (keeper, pins, units), share, drive, migration
+                                offline folders (keeper, pins, units), folder backups,
+                                share, drive, migration
 crates/i18n   rclone-ui-i18n    the UI text: Fluent files, loader, fl! macro, export for QML/C++
 crates/view   rclone-ui-view    presentation model: what to show and which actions apply,
                                 as plain Rust (strings come from i18n, never literals)
-crates/cli    rclone-shell-ext  the shared binary: keeper, pin units, offline/status/share CLI
+crates/cli    rclone-shell-ext  the shared binary: keepers, pin units, offline/backup/status/share CLI
 cosmic/       rclone-shell-ext-cosmic        libcosmic applet + windows (widgets only)
 plasma/daemon rclone-shell-ext-plasma        zbus daemon (+ window launcher)
 plasma/ui     rclone-shell-ext-plasma-ui     cxx-qt bridge + Kirigami QML windows
@@ -33,7 +34,7 @@ Both front ends share **one identity** and therefore one set of state on a machi
 | Dev build | slug `rclone-shell-ext-dev`, app id `com.ca-peterson.rclone-shell-ext-dev` |
 | Config | `$XDG_CONFIG_HOME/rclone-shell-ext/config.toml` (`core::config::TomlStore`) |
 | Data / state | `$XDG_DATA_HOME/rclone-shell-ext/`, `$XDG_STATE_HOME/rclone-shell-ext/` |
-| systemd units | `rclone-shell-ext-offline.service`, `rclone-shell-ext-pin@.service`, drop-in `50-rclone-shell-ext.conf`; all `ExecStart` the shared `rclone-shell-ext` binary |
+| systemd units | `rclone-shell-ext-offline.service`, `rclone-shell-ext-pin@.service`, `rclone-shell-ext-backup.service`, drop-in `50-rclone-shell-ext.conf`; all `ExecStart` the shared `rclone-shell-ext` binary |
 | COSMIC desktop id | `com.ca-peterson.rclone-shell-ext.Cosmic` |
 | Plasma desktop id (settings launcher) | `com.ca-peterson.rclone-shell-ext.Plasma` |
 | Plasmoid id | `com.ca-peterson.rclone-shell-ext` |
@@ -125,6 +126,32 @@ any of them. Everything in the migration takes injected roots (XDG dirs, a `syst
 and mount probes) and is tested against temp dirs; it is never exercised against `$HOME` in tests
 or by agents.
 
+## Folder backups
+
+`core::backup` mirrors local folders (anywhere outside the mount) to
+`<remote>:Computers/<host>/<name>`. Google's real "Computers" tab has no public API, so this is a
+plain folder in My Drive. Rules:
+
+- Config holds `backup_folders` (`source`, full `destination`) and `backup_interval_secs`;
+  `backup.json` in the state dir holds per-folder `last_success` / error **codes** and which folder
+  is running. `backup::error_label` translates codes at display time.
+- The keeper (`--backup-keeper`, `<slug>-backup.service`, `WantedBy=default.target`) runs the
+  `rclone` CLI (`sync --create-empty-src-dirs --skip-links`), not the mount's rc API: the offline
+  keeper and the migration treat every rc job on the mount as theirs, and backups must run while
+  the mount is down. One keeper per identity (`backup-keeper.lock`), one pass at a time
+  (`backup-running.lock`, which also tells `status()` a pass was cut off).
+- Never mirror an empty or missing source (an unplugged disk would empty the backup). Sources
+  inside the mount, the cache or the app's dirs are refused; those dirs inside a source are
+  `--exclude`d. Sources and destinations may not nest.
+- New destinations get ` (2)`… when the name is used by another entry or already exists on the
+  remote, so a mirror never replaces something it didn't write. Linking a restored folder refuses a
+  destination another entry already mirrors to.
+- Front ends: COSMIC Files `context_actions` entry and the Dolphin plugin run `--backup PATH` /
+  `--backup-remove PATH` (the CLI notifies); settings windows use `view::backup` rows and call
+  `backup::add`/`remove`/`list_remote` (off the UI thread) and `spawn_restore`.
+- Tests inject the `rclone` runner and temp dirs; `real_rclone_backup_*` (in `just test-live`)
+  runs the real binary against a throwaway local remote.
+
 ## UI text (string externalization)
 
 Goal: one wording, defined once, used by every surface (iced widgets, Kirigami QML, the
@@ -140,6 +167,7 @@ today; the layout is ready for more. Message ids are kebab-case and prefixed by 
 | `details-` | the details window |
 | `settings-` | the settings window |
 | `offline-` | offline folders: phases, consent, setup steps, keeper errors |
+| `backup-` | folder backups: menu items, notifications, status, errors |
 | `migrate-` | the migration: plan, errors, banner labels |
 | `share-`, `drive-` | sharing and Drive metadata |
 | `cli-` | CLI output |

@@ -119,6 +119,20 @@ QString DaemonClient::getPropertyBlocking(const QString &name, int timeoutMs)
     return reply.arguments().first().value<QDBusVariant>().variant().toString();
 }
 
+QString DaemonClient::callStringBlocking(const QString &method, int timeoutMs)
+{
+    if (backedOff()) {
+        return {};
+    }
+    auto msg = QDBusMessage::createMethodCall(kService, kPath, kIface, method);
+    const QDBusReply<QString> reply = QDBusConnection::sessionBus().call(msg, QDBus::Block, timeoutMs);
+    if (!reply.isValid()) {
+        noteError();
+        return {};
+    }
+    return reply.value();
+}
+
 QString DaemonClient::text(const QString &id)
 {
     const bool mayBlock = !s_stringsAttempt.isValid() || s_stringsAttempt.elapsed() >= kBackoffMs;
