@@ -6,7 +6,7 @@
 
 use rclone_ui_core::config::store;
 use rclone_ui_core::migrate::plasma_panel;
-use rclone_ui_core::{keeper, migrate, pin, rc, share, units};
+use rclone_ui_core::{backup, keeper, migrate, pin, rc, share, units};
 use rclone_ui_i18n::fl;
 
 /// The value after `flag`, if present.
@@ -25,9 +25,14 @@ fn has(args: &[String], flag: &str) -> bool {
 /// those very units.
 #[must_use]
 pub fn is_unit_mode(args: &[String]) -> bool {
-    ["--offline-keeper", "--pin-mount", "--pin-unmount"]
-        .iter()
-        .any(|f| has(args, f))
+    [
+        "--offline-keeper",
+        "--pin-mount",
+        "--pin-unmount",
+        "--backup-keeper",
+    ]
+    .iter()
+    .any(|f| has(args, f))
 }
 
 /// The command-line modes that change offline folders: they migrate an old install first, in the
@@ -79,6 +84,9 @@ pub fn run(args: &[String]) -> Option<i32> {
         )));
     }
     if let Some(code) = offline_cli(args) {
+        return Some(code);
+    }
+    if let Some(code) = backup_cli(args) {
         return Some(code);
     }
     if let Some(path) = arg(args, "--share-url") {
@@ -162,6 +170,145 @@ fn report(r: Result<String, String>) -> i32 {
             1
         }
     }
+}
+
+/// Every argument after `flag` up to the next `--option` (file managers pass several paths).
+fn args_after<'a>(args: &'a [String], flag: &str) -> Option<Vec<&'a str>> {
+    let i = args.iter().position(|a| a == flag)?;
+    Some(
+        args[i + 1..]
+            .iter()
+            .take_while(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .collect(),
+    )
+}
+
+/// Print `r` and also show it as a notification: these modes run from file-manager menus and
+/// settings windows, where nobody sees a terminal.
+fn report_and_notify(r: Result<String, String>) -> i32 {
+    match &r {
+        Ok(m) | Err(m) => backup::notify(m),
+    }
+    report(r)
+}
+
+/// Add or remove each of `paths`, reporting each one; non-zero if any failed.
+fn change_each(
+    paths: &[&str],
+    change: fn(&str) -> Result<rclone_ui_core::config::BackupFolder, String>,
+    done: fn(&str, &str) -> String,
+) -> i32 {
+    let mut code = 0;
+    for p in paths {
+        code |= report_and_notify(change(p).map(|f| done(&f.source, &f.destination)).map_err(
+            |e| {
+                fl!(
+                    "backup-notify-failed",
+                    folder = p.to_string(),
+                    error = backup::error_label(&e)
+                )
+            },
+        ));
+    }
+    code
+}
+
+/// Folder-backup commands. Returns the exit code if one ran.
+fn backup_cli(args: &[String]) -> Option<i32> {
+    if has(args, "--backup-keeper") {
+        return Some(report(backup::run_keeper().map(|()| String::new())));
+    }
+    if let Some(paths) = args_after(args, "--backup") {
+        return Some(change_each(&paths, backup::add, |folder, destination| {
+            fl!(
+                "backup-notify-added",
+                folder = folder,
+                destination = destination
+            )
+        }));
+    }
+    if let Some(paths) = args_after(args, "--backup-remove") {
+        return Some(change_each(
+            &paths,
+            backup::remove,
+            |folder, destination| {
+                fl!(
+                    "backup-notify-removed",
+                    folder = folder,
+                    destination = destination
+                )
+            },
+        ));
+    }
+    if let Some(rest) = args_after(args, "--backup-restore") {
+        let [destination, target, ..] = rest[..] else {
+            return Some(report(Err(usage())));
+        };
+        let link = has(args, "--link");
+        return Some(report_and_notify(
+            backup::restore(destination, target, link)
+                .map(|f| {
+                    if link {
+                        fl!(
+                            "backup-notify-restored-linked",
+                            destination = destination,
+                            folder = f.source
+                        )
+                    } else {
+                        fl!(
+                            "backup-notify-restored",
+                            destination = destination,
+                            folder = f.source
+                        )
+                    }
+                })
+                .map_err(|e| {
+                    fl!(
+                        "backup-notify-restore-failed",
+                        destination = destination,
+                        folder = target,
+                        error = backup::error_label(&e)
+                    )
+                }),
+        ));
+    }
+    // `--backups` lists this machine's backups; `--backups --remote` every backup in Drive.
+    if has(args, "--backups") && has(args, "--remote") {
+        return Some(report(
+            backup::list_remote()
+                .map(|list| {
+                    list.iter()
+                        .map(|b| {
+                            fl!(
+                                "cli-backup-remote-line",
+                                destination = b.destination.as_str()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .map_err(|e| backup::error_label(&e)),
+        ));
+    }
+    if has(args, "--backups") {
+        let cfg = store().load();
+        if cfg.backup_folders.is_empty() {
+            println!("{}", fl!("cli-backup-none"));
+        }
+        for f in &cfg.backup_folders {
+            println!(
+                "{}",
+                fl!(
+                    "cli-backup-line",
+                    folder = f.source.as_str(),
+                    destination = f.destination.as_str()
+                )
+            );
+        }
+        return Some(0);
+    }
+    None
 }
 
 /// Offline-folder commands that don't open a window. Returns the exit code if one ran.

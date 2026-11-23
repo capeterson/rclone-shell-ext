@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The settings window (`rclone-shell-ext-plasma --settings`): offline folders setup and the pinned list,
-// plus the Dolphin integration.
+// folder backups and restoring them, plus the Dolphin integration.
 pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls as QQC2
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.formcard as FormCard
@@ -35,6 +36,8 @@ Kirigami.ApplicationWindow {
     readonly property var setupSteps: parse(settings.setupStepsJson)
     readonly property var pins: parse(settings.pinsJson)
     readonly property var notices: parse(settings.noticesJson)
+    readonly property var backups: parse(settings.backupsJson)
+    readonly property var restores: parse(settings.restoreJson)
 
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
     pageStack.initialPage: FormCard.FormCardPage {
@@ -176,6 +179,119 @@ Kirigami.ApplicationWindow {
             }
         }
 
+        // Folder backups
+        FormCard.FormHeader { title: Strings.t("settings-heading-backups") }
+        FormCard.FormCard {
+            FormCard.FormTextDelegate {
+                description: settings.backupDescription
+            }
+            FormCard.FormTextDelegate {
+                visible: root.backups.length === 0
+                description: Strings.t("settings-backup-none")
+            }
+            Repeater {
+                model: root.backups
+                delegate: FormCard.AbstractFormDelegate {
+                    id: backupRow
+                    required property var modelData
+                    background: null
+                    contentItem: RowLayout {
+                        spacing: Kirigami.Units.largeSpacing
+                        Kirigami.Icon {
+                            source: backupRow.modelData.error ? "dialog-error-symbolic" : "folder-cloud"
+                            implicitWidth: Kirigami.Units.iconSizes.small
+                            implicitHeight: Kirigami.Units.iconSizes.small
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 0
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                text: backupRow.modelData.source
+                                elide: Text.ElideMiddle
+                            }
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                text: backupRow.modelData.destination
+                                elide: Text.ElideMiddle
+                                font: Kirigami.Theme.smallFont
+                                opacity: 0.7
+                            }
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                text: backupRow.modelData.status
+                                wrapMode: Text.Wrap
+                                font: Kirigami.Theme.smallFont
+                                color: backupRow.modelData.error ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
+                                opacity: backupRow.modelData.error ? 1 : 0.7
+                            }
+                        }
+                        QQC2.Button {
+                            text: Strings.t("backup-menu-remove")
+                            icon.name: "list-remove"
+                            enabled: !settings.backupBusy
+                            onClicked: settings.stopBackup(backupRow.modelData.source)
+                        }
+                    }
+                }
+            }
+            FormCard.FormButtonDelegate {
+                text: Strings.t("settings-backup-add")
+                icon.name: "list-add"
+                enabled: !settings.backupBusy
+                onClicked: backupDialog.open()
+            }
+        }
+
+        // Restoring a backup (this machine's or another's) to any local folder
+        FormCard.FormHeader { title: Strings.t("settings-restore-heading") }
+        FormCard.FormCard {
+            FormCard.FormButtonDelegate {
+                text: settings.restoreLoading ? Strings.t("settings-restore-loading") : Strings.t("settings-restore-load")
+                icon.name: "edit-find"
+                enabled: !settings.restoreLoading
+                onClicked: settings.findBackups()
+            }
+            FormCard.FormTextDelegate {
+                visible: settings.restoreLoaded && !settings.restoreLoading && root.restores.length === 0
+                text: Strings.t("settings-restore-none")
+            }
+            Repeater {
+                model: root.restores
+                delegate: FormCard.AbstractFormDelegate {
+                    id: restoreRow
+                    required property var modelData
+                    background: null
+                    contentItem: RowLayout {
+                        spacing: Kirigami.Units.largeSpacing
+                        Kirigami.Icon {
+                            source: "folder-cloud"
+                            implicitWidth: Kirigami.Units.iconSizes.small
+                            implicitHeight: Kirigami.Units.iconSizes.small
+                        }
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            text: restoreRow.modelData.label
+                            elide: Text.ElideMiddle
+                        }
+                        QQC2.Button {
+                            text: Strings.t("settings-restore-button")
+                            icon.name: "document-import"
+                            onClicked: {
+                                restoreDialog.destination = restoreRow.modelData.destination;
+                                restoreDialog.open();
+                            }
+                        }
+                    }
+                }
+            }
+            FormCard.FormCheckDelegate {
+                id: restoreLink
+                visible: root.restores.length > 0
+                text: Strings.t("settings-restore-link")
+            }
+        }
+
         // Dolphin integration
         FormCard.FormHeader { title: Strings.t("plasma-settings-dolphin-heading") }
         FormCard.FormCard {
@@ -209,6 +325,20 @@ Kirigami.ApplicationWindow {
                 text: settings.note
             }
         }
+    }
+
+    FolderDialog {
+        id: backupDialog
+        title: Strings.t("settings-backup-choose")
+        onAccepted: settings.addBackup(backupDialog.selectedFolder)
+    }
+
+    FolderDialog {
+        id: restoreDialog
+        // The backup the dialog was opened for (its rclone path).
+        property string destination: ""
+        title: Strings.t("settings-restore-choose")
+        onAccepted: settings.restoreBackup(restoreDialog.destination, restoreDialog.selectedFolder, restoreLink.checked)
     }
 
     // Informed consent before setup changes anything: what will change, then Continue (on to

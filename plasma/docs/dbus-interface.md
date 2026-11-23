@@ -31,7 +31,7 @@ Each value maps to an installed icon named `rclone-shell-ext-<kebab>`: `rclone-s
 | `OpenSettings()` | Spawns `rclone-shell-ext-plasma --settings`. |
 | `FileStates(as paths) -> a{sas}` | Maps each absolute local path to emblem icon names (see the Overlay emblems section below). A path outside the mount maps to `[]`. This must answer quickly from a cache: a cache miss returns `[]` straight away and computes the state in the background. When the state is ready, the daemon emits `ItemsChanged`. |
 | `Strings() -> a{ss}` | Every UI message that has no variables (id → text), in the daemon's language (`rclone_ui_i18n::static_messages()`). The plasmoid and the Dolphin plugins use it for all their wording; ids that need arguments never appear here and arrive preformatted in `StatusJson`. Call it once and cache it. Being a method call, it also D-Bus-activates the daemon. |
-| `GetConfig() -> s` | The config as JSON (fields from `rclone_ui_core::config::Config`). If the config file exists but can't be read (corrupt), it is instead `{"errorText": "<finished, translated message including the reason>"}`: show `errorText` as is, and don't offer to edit. |
+| `GetConfig() -> s` | The config as JSON (fields from `rclone_ui_core::config::Config`). If the config file exists but can't be read (corrupt), it is instead `{"errorText": "<finished, translated message including the reason>"}`: show `errorText` as is, and don't offer to edit. The Dolphin action plugin reads `backup_folders[].source` from it to offer "Stop backing up" instead of "Back up to Drive" on a backed-up folder. |
 | `SetConfig(s json) -> s` | Merges these JSON fields into the config, saves it, and returns `""` on success or an error message. |
 
 ## Signals

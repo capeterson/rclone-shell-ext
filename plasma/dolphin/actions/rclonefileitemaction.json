@@ -2,7 +2,7 @@
     "KPlugin": {
         "Id": "rclonefileitemaction",
         "Name": "rclone",
-        "Description": "rclone actions for files in the rclone mount",
+        "Description": "rclone actions for files in the rclone mount, and folder backups",
         "License": "GPL-3.0",
         "Version": "0.1.0",
         "MimeTypes": ["application/octet-stream", "inode/directory"]

@@ -2,25 +2,29 @@
 //! The settings window (`--settings`, or "Settings…" in the panel popup).
 //!
 //! Its main job is offline folders. What the window says and the consent -> setup -> rollback
-//! flow live in `rclone_ui_view::settings` (shared with the Plasma window); this file is the
-//! iced widgets, messages and worker tasks around it.
+//! flow live in `rclone_ui_view::settings` (shared with the Plasma window); the Backups and
+//! Restore sections' rows and labels live in `rclone_ui_view::backup`. This file is the iced
+//! widgets, messages and worker tasks around them.
 
 use crate::config::{Config, ConfigExt, ConfigWatch, WATCH_EVERY};
 use crate::offline_setup::{set_up, tear_down, turn_on, Checks};
 use crate::pin::{self, OfflineState};
 use crate::{keeper, share};
 use cosmic::app::Settings;
+use cosmic::dialog::file_chooser;
 use cosmic::iced::{time, Alignment, Length, Size, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget::{self, settings};
+use rclone_ui_core::backup::{self as core_backup, BackupStatus, RemoteBackup};
 use rclone_ui_i18n::fl;
+use rclone_ui_view::backup::{self, RestoreRow};
 use rclone_ui_view::settings::{ConsentAction, SettingsState, ToggleAction};
 use rclone_ui_view::REFRESH;
 
 #[derive(Debug, Clone)]
 enum Message {
     Refresh,
-    Refreshed(Checks, OfflineState),
+    Refreshed(Checks, OfflineState, BackupStatus),
     /// Time to look at the settings file for outside changes.
     ConfigTick,
     ToggleOffline(bool),
@@ -33,12 +37,47 @@ enum Message {
     Repair(String),
     Open(String),
     ToggleContextMenu(bool),
+    /// "Back up a folder…": open the folder picker.
+    BackupPick,
+    /// The folder picked to back up (`None`: the picker was cancelled).
+    BackupPicked(Result<Option<String>, String>),
+    BackupRemove(String),
+    /// `backup::add` or `remove` finished; the error is a failure code.
+    BackupChanged(Result<(), String>),
+    /// "Find backups in Drive".
+    RestoreLoad,
+    /// The backups in Drive, or a failure code.
+    RestoreLoaded(Result<Vec<RemoteBackup>, String>),
+    RestoreLink(bool),
+    /// "Restore to…" on the backup at this remote destination: open the folder picker.
+    RestorePick(String),
+    /// Where to restore that backup (`None`: the picker was cancelled).
+    RestorePicked(String, Result<Option<String>, String>),
+    /// The restore process started (or the message why it couldn't), for this local folder.
+    RestoreStarted(String, Result<(), String>),
+}
+
+/// The Restore section's list of backups in Drive.
+enum RestoreList {
+    /// Not asked for yet: listing runs rclone over the network, so it waits for the button.
+    NotLoaded,
+    Loading,
+    Loaded(Vec<RestoreRow>),
 }
 
 struct App {
     core: cosmic::Core,
     st: SettingsState,
     config_watch: ConfigWatch,
+    /// The backup keeper's last report, read on every refresh.
+    backups: BackupStatus,
+    /// A backup is being added or removed: its buttons wait.
+    backup_busy: bool,
+    /// The Backups section's description; it names this machine, which doesn't change.
+    backup_description: String,
+    restore: RestoreList,
+    /// "Keep backing up the restored folder".
+    restore_link: bool,
 }
 
 type Task = cosmic::app::Task<Message>;
@@ -53,6 +92,32 @@ fn blocking<T: Send + 'static>(
             Ok(v) => cosmic::Action::App(msg(v)),
             Err(e) => cosmic::Action::App(Message::Done(Err(e.to_string()))),
         },
+    )
+}
+
+/// Ask for a folder through the desktop's file chooser portal. `Ok(None)` when cancelled.
+fn pick_folder(
+    title: String,
+    msg: impl Fn(Result<Option<String>, String>) -> Message + Send + 'static,
+) -> Task {
+    Task::perform(
+        async move {
+            match file_chooser::open::Dialog::new()
+                .title(title)
+                .open_folder()
+                .await
+            {
+                // A location that isn't a local path is passed on as its URL, so the backup
+                // code rejects it with its own "not a local folder" error.
+                Ok(r) => Ok(Some(r.url().to_file_path().map_or_else(
+                    |()| r.url().to_string(),
+                    |p| p.to_string_lossy().into_owned(),
+                ))),
+                Err(file_chooser::Error::Cancelled) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
+        },
+        move |r| cosmic::Action::App(msg(r)),
     )
 }
 
@@ -77,6 +142,11 @@ impl cosmic::Application for App {
             core,
             st: SettingsState::new(cfg),
             config_watch: ConfigWatch::default(),
+            backups: BackupStatus::default(),
+            backup_busy: false,
+            backup_description: backup::description(),
+            restore: RestoreList::NotLoaded,
+            restore_link: false,
         };
         (app, Task::done(cosmic::Action::App(Message::Refresh)))
     }
@@ -93,13 +163,21 @@ impl cosmic::Application for App {
             Message::Refresh => {
                 let cfg = self.st.cfg.clone();
                 return blocking(
-                    move || (Checks::probe(&cfg), OfflineState::load()),
-                    |(c, s)| Message::Refreshed(c, s),
+                    move || {
+                        (
+                            Checks::probe(&cfg),
+                            OfflineState::load(),
+                            // An unreadable report shows the folders as not backed up yet.
+                            core_backup::status().unwrap_or_default(),
+                        )
+                    },
+                    |(c, s, b)| Message::Refreshed(c, s, b),
                 );
             }
-            Message::Refreshed(c, s) => {
+            Message::Refreshed(c, s, b) => {
                 self.st.checks = c;
                 self.st.state = s;
+                self.backups = b;
             }
             Message::ConfigTick => {
                 if let Some(c) = self.config_watch.poll() {
@@ -123,6 +201,11 @@ impl cosmic::Application for App {
                 };
             }
             Message::Done(r) => {
+                // Also where a backup task lands if its worker panicked: let its buttons go.
+                self.backup_busy = false;
+                if matches!(self.restore, RestoreList::Loading) {
+                    self.restore = RestoreList::NotLoaded;
+                }
                 // A failed turn-on switches itself back off; show that now, not on the next
                 // config notification.
                 self.st.finish(r, Config::load());
@@ -151,6 +234,16 @@ impl cosmic::Application for App {
                 }
                 Err(e) => self.st.error = Some(e),
             },
+            m @ (Message::BackupPick
+            | Message::BackupPicked(_)
+            | Message::BackupRemove(_)
+            | Message::BackupChanged(_)
+            | Message::RestoreLoad
+            | Message::RestoreLoaded(_)
+            | Message::RestoreLink(_)
+            | Message::RestorePick(_)
+            | Message::RestorePicked(..)
+            | Message::RestoreStarted(..)) => return self.update_backup(m),
         }
         Task::none()
     }
@@ -197,6 +290,8 @@ impl cosmic::Application for App {
         if !notices.is_empty() {
             sections.push(Self::notices_section(notices));
         }
+        sections.push(self.backup_section(now));
+        sections.push(self.restore_section());
         sections.push(
             settings::section()
                 .title(fl!("settings-heading-general"))
@@ -233,6 +328,150 @@ impl cosmic::Application for App {
 }
 
 impl App {
+    /// The Backups and Restore sections' messages.
+    fn update_backup(&mut self, message: Message) -> Task {
+        match message {
+            Message::BackupPick => {
+                return pick_folder(fl!("settings-backup-choose"), Message::BackupPicked);
+            }
+            Message::BackupPicked(Ok(Some(source))) => {
+                self.backup_busy = true;
+                return blocking(
+                    move || core_backup::add(&source).map(drop),
+                    Message::BackupChanged,
+                );
+            }
+            Message::BackupPicked(Err(e)) | Message::RestorePicked(_, Err(e)) => {
+                self.st.error = Some(e);
+            }
+            Message::BackupRemove(source) => {
+                self.backup_busy = true;
+                return blocking(
+                    move || core_backup::remove(&source).map(drop),
+                    Message::BackupChanged,
+                );
+            }
+            Message::BackupChanged(r) => {
+                self.backup_busy = false;
+                match r {
+                    Ok(()) => {
+                        self.st.error = None;
+                        self.st.apply_config(Config::load());
+                        return cosmic::Application::update(self, Message::Refresh);
+                    }
+                    Err(code) => self.st.error = Some(backup::error(&code)),
+                }
+            }
+            Message::RestoreLoad => {
+                self.restore = RestoreList::Loading;
+                return blocking(core_backup::list_remote, Message::RestoreLoaded);
+            }
+            Message::RestoreLoaded(Ok(list)) => {
+                self.restore = RestoreList::Loaded(backup::restore_rows(&list));
+            }
+            Message::RestoreLoaded(Err(code)) => {
+                self.restore = RestoreList::NotLoaded;
+                self.st.error = Some(backup::error(&code));
+            }
+            Message::RestoreLink(on) => self.restore_link = on,
+            Message::RestorePick(destination) => {
+                return pick_folder(fl!("settings-restore-choose"), move |r| {
+                    Message::RestorePicked(destination.clone(), r)
+                });
+            }
+            Message::RestorePicked(destination, Ok(Some(target))) => {
+                let link = self.restore_link;
+                return blocking(
+                    move || {
+                        let r = core_backup::spawn_restore(&destination, &target, link);
+                        (target, r)
+                    },
+                    |(target, r)| Message::RestoreStarted(target, r),
+                );
+            }
+            Message::RestoreStarted(target, Ok(())) => {
+                self.st.note = Some(backup::restore_started(&target));
+                self.st.error = None;
+            }
+            Message::RestoreStarted(_, Err(e)) => self.st.error = Some(e),
+            // A cancelled picker, or a message `update` handles.
+            _ => {}
+        }
+        Task::none()
+    }
+
+    /// The folders this machine backs up, each with "Stop backing up", and "Back up a folder…".
+    fn backup_section(&self, now: i64) -> Element<'_, Message> {
+        let mut sec = settings::section()
+            .title(fl!("settings-heading-backups"))
+            .add(widget::text::body(self.backup_description.as_str()));
+        let rows = backup::rows(&self.st.cfg, &self.backups, now);
+        if rows.is_empty() {
+            sec = sec.add(widget::text::body(fl!("settings-backup-none")));
+        }
+        for row in rows {
+            let icon = if row.error {
+                "dialog-error-symbolic"
+            } else {
+                "folder-symbolic"
+            };
+            let stop = widget::button::destructive(fl!("backup-menu-remove")).on_press_maybe(
+                (!self.backup_busy).then(|| Message::BackupRemove(row.source.clone())),
+            );
+            sec = sec.add(
+                settings::item::builder(row.source)
+                    .description(format!("{}\n{}", row.destination, row.status))
+                    .icon(widget::icon::from_name(icon).size(16))
+                    .control(stop),
+            );
+        }
+        sec.add(settings::item_row(vec![
+            widget::space::horizontal().into(),
+            widget::button::standard(fl!("settings-backup-add"))
+                .on_press_maybe((!self.backup_busy).then_some(Message::BackupPick))
+                .into(),
+        ]))
+        .into()
+    }
+
+    /// "Find backups in Drive", then every machine's backups with "Restore to…".
+    fn restore_section(&self) -> Element<'_, Message> {
+        let loading = matches!(self.restore, RestoreList::Loading);
+        let mut sec = settings::section()
+            .title(fl!("settings-restore-heading"))
+            .add(settings::item_row(vec![
+                widget::space::horizontal().into(),
+                widget::button::standard(fl!("settings-restore-load"))
+                    .on_press_maybe((!loading).then_some(Message::RestoreLoad))
+                    .into(),
+            ]));
+        match &self.restore {
+            RestoreList::NotLoaded => {}
+            RestoreList::Loading => {
+                sec = sec.add(widget::text::body(fl!("settings-restore-loading")));
+            }
+            RestoreList::Loaded(rows) if rows.is_empty() => {
+                sec = sec.add(widget::text::body(fl!("settings-restore-none")));
+            }
+            RestoreList::Loaded(rows) => {
+                // Applies to whichever backup is restored next.
+                sec = sec.add(
+                    settings::item::builder(fl!("settings-restore-link"))
+                        .checkbox(self.restore_link, Message::RestoreLink),
+                );
+                for row in rows {
+                    sec = sec.add(
+                        settings::item::builder(row.label.as_str()).control(
+                            widget::button::standard(fl!("settings-restore-button"))
+                                .on_press(Message::RestorePick(row.destination.clone())),
+                        ),
+                    );
+                }
+            }
+        }
+        sec.into()
+    }
+
     /// The setup checklist, shown while setup is running or incomplete.
     fn setup_rows<'a>(
         &self,
