@@ -26,3 +26,15 @@ test-live:
     trap 'kill $pid 2>/dev/null; rm -rf "$dir"' EXIT
     sleep 2
     RCS_IT_DIR="$dir" cargo test -p rclone-ui-core --locked -- --ignored real_rclone
+
+# Screenshot any window in a throwaway headless KWin (never your desktop), e.g.
+# `just screenshot cosmic-settings target/debug/rclone-shell-ext-cosmic --settings`.
+# Writes target/screenshots/NAME.png. Options for scripts/headless-screenshot.sh go in OPTS.
+screenshot name *cmd:
+    scripts/headless-screenshot.sh {{env_var_or_default('OPTS', '')}} -o target/screenshots/{{name}}.png -- {{cmd}}
+
+# Screenshot both settings windows (needs the COSMIC and Plasma toolchains)
+screenshots:
+    cargo build -p rclone-shell-ext-cosmic -p rclone-shell-ext-plasma -p rclone-shell-ext
+    just screenshot cosmic-settings target/debug/rclone-shell-ext-cosmic --settings
+    just screenshot plasma-settings target/debug/rclone-shell-ext-plasma --settings

@@ -46,6 +46,8 @@ Every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`. No literals i
   (e.g. core's `test-identity`) and can hide a missing dev-dependency, so check with `just ci`
   or `cargo test -p <package>` before pushing.
 - `just test-live`: against a throwaway `rclone rcd`.
+- `just screenshots` / `just screenshot NAME CMD...`: windows rendered in a sandboxed headless
+  KWin (skill `headless-screenshots`).
 - `just cosmic::install-user` / `just plasma::install-user`: installs into `~/.local`. After a
   Plasma install, restart Dolphin with `QT_PLUGIN_PATH` set.
 
@@ -53,7 +55,8 @@ Every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`. No literals i
 
 - Never run migration, install, `systemctl --user`, or offline-folder setup against the real
   `$HOME` from tests or scripts: inject roots and runners, use temp dirs.
-- Never grab screenshots of the live desktop; render offscreen or ask.
+- Never grab screenshots of the live desktop: use `just screenshot` (sandboxed headless KWin) or
+  ask. Never kill `kwin_wayland`/`plasmashell` by name.
 - Clippy is pedantic with `-D warnings`; keep `cargo fmt` clean.
 - Keep `Cargo.lock` committed; it pins libcosmic. Don't `cargo update` broadly.
 - Comments explain why, in plain sentences; doc comments on every `pub` item in `crates/`.

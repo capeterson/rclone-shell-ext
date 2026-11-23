@@ -1,0 +1,10 @@
+# Sample settings for `just screenshot`. `~` is the throwaway sandbox home, never yours; the
+# folders named here are created in it. Nothing is mounted and rclone has no remotes, so
+# windows show the "mount down" states.
+mount_path = "~/GoogleDrive"
+offline_enabled = false
+pins = []
+
+[[backup_folders]]
+source = "~/Documents"
+destination = "gdrive:Computers/sandbox/Documents"

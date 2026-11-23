@@ -220,11 +220,17 @@ The front-end binaries add their own modes (`rclone-shell-ext-plasma --daemon`, 
 just ci            # everything CI runs, for the parts you have toolchains for
 just core::ci      # or just cosmic::ci, just plasma::ci
 just test-live     # the tests that drive a throwaway `rclone rcd` (run after upgrading rclone)
+just screenshots   # both settings windows, rendered in a sandboxed headless KWin -> target/screenshots/
+just screenshot NAME CMD...   # any window the same way (see scripts/headless-screenshot.sh)
 cargo test --workspace --locked
 ```
 
 - Tests are hermetic: they use temp directories and injected roots, never the real `$HOME`,
   and a test run never runs the migration.
+- Screenshots never touch your desktop: `scripts/headless-screenshot.sh` runs a virtual-backend
+  `kwin_wayland` under `env -i` and `dbus-run-session` with a throwaway HOME, XDG dirs and
+  runtime dir (sample settings from `scripts/screenshot-fixture/`), and captures with Spectacle
+  inside it. Needs `kwin_wayland` and `spectacle` (any Plasma install); no X11.
 - UI text: every user-visible string lives in `i18n/en/rclone_shell_ext.ftl`; add or change
   wording there and run `cargo test -p rclone-ui-i18n` (the sync check). See `AGENTS.md`
   ("UI text") for the id and prefix rules.
