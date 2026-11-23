@@ -27,6 +27,15 @@ OPTS="-c my-fixture.toml --keep" just screenshot NAME CMD ... # own settings; ke
 - The default fixture is `scripts/screenshot-fixture/config.toml` (one backed-up folder, mount
   not running). For other states copy it, edit, and pass `-c`. Folders written as `"~/..."` in the
   fixture are created inside the sandbox home.
+- **Keeper state** (`backup.json`, `offline.json` in `$XDG_STATE_HOME/rclone-shell-ext/`): wrap
+  the command in a small script that writes the files and then `exec`s the window; it runs inside
+  the sandbox, so `$HOME`/`$XDG_STATE_HOME` are the sandbox's. Status keys must be the
+  `source`/`rel` strings exactly as in the fixture config (`"~/Documents"`, not the expanded
+  path), or every row falls back to its default state. To show a pass as *running*, also hold
+  the run lock: `flock "$st/backup-running.lock" sleep 60 &` before `exec`.
+- COSMIC icons: the script points libcosmic at `breeze-dark` in the sandbox when the Cosmic icon
+  theme isn't installed; without that every COSMIC icon renders blank. Blank icons elsewhere are
+  also a sandbox theme issue, not proof the code lacks them.
 - Look at the result with the `read` tool on the PNG. Report what you saw, and that it is a
   software-rendered headless KWin (layout and text, not performance or the real theme's exact
   look; the COSMIC window gets KWin's decorations, not COSMIC's).
@@ -52,8 +61,7 @@ OPTS="-c my-fixture.toml --keep" just screenshot NAME CMD ... # own settings; ke
 
 ## Limits
 
-- Startup only: no clicks or typing. For a state behind a click, prefer a fixture that puts the
-  window there (config, `offline.json`/`backup.json` in the sandbox state dir via a custom
-  fixture flow) over scripting input.
+- Startup only: no clicks or typing. For a state behind a click, prefer seeding config and
+  state (above) over scripting input; say plainly which states you couldn't reach.
 - The COSMIC panel applet (layer-shell inside cosmic-comp) and Dolphin's context menu can't be
   shown this way.

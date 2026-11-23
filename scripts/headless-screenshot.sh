@@ -59,11 +59,23 @@ rm -f "$out"
 
 sandbox=$(mktemp -d "${TMPDIR:-/tmp}/rcse-headless.XXXXXX")
 cleanup() {
+    local status=$?
+    set +e
     if [[ $keep -eq 1 ]]; then
         echo "sandbox kept: $sandbox" >&2
     else
-        rm -rf "$sandbox"
+        # The sandbox's own xdg-document-portal mounts a FUSE filesystem at $run/doc and may still
+        # be exiting. Unmount only mounts inside this sandbox (lazily), then remove it.
+        for _ in 1 2 3 4 5; do
+            findmnt -rn -o TARGET | grep -F "$sandbox/" | while read -r m; do
+                fusermount3 -u -z "$m" 2>/dev/null || fusermount -u -z "$m" 2>/dev/null
+            done
+            rm -rf "$sandbox" 2>/dev/null && break
+            sleep 1
+        done
+        [[ -e "$sandbox" ]] && echo "could not remove $sandbox" >&2
     fi
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -80,6 +92,12 @@ cp "$config" "$home/.config/rclone-shell-ext/config.toml"
 grep -oE '"~/[^"]*"' "$config" | tr -d '"' | while read -r p; do
     mkdir -p "$home/${p#\~/}"
 done
+# libcosmic looks icons up in its configured theme ("Cosmic"), which a Plasma-only machine lacks;
+# without one every icon in a COSMIC window renders blank. Point it at an installed theme.
+if [[ ! -d /usr/share/icons/Cosmic ]]; then
+    mkdir -p "$home/.config/cosmic/com.system76.CosmicTk/v1"
+    printf '"breeze-dark"' >"$home/.config/cosmic/com.system76.CosmicTk/v1/icon_theme"
+fi
 
 # The script KWin runs as its session: start the window, wait, capture the active window (or the
 # whole virtual screen if nothing is active), then end the session.
