@@ -222,6 +222,11 @@ health-cache-full = Cache is full
 health-unreachable = Can't reach rclone
 health-not-mounted = Not mounted
 health-service-stopped = Service stopped
+health-login-start-off-title = rclone doesn't start when you log in
+health-login-start-off-body = { $service } isn't enabled in systemd, so your Drive folder stays unmounted after every restart until you start it.
+health-login-start-enable = Start at login
+health-login-start-dismiss = Don't remind me
+health-login-start-failed = Couldn't set { $service } to start at login: { $error }
 health-uploading-files = Uploading: { $count ->
     [one] 1 file
    *[other] { $count } files

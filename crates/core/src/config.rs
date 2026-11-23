@@ -29,6 +29,8 @@ pub struct Config {
     pub pins: Vec<String>,
     /// How often each offline folder is synced with the remote when nothing changes locally.
     pub sync_interval_secs: u64,
+    /// Remind the user (once per boot) when `service` isn't enabled to start at login.
+    pub login_start_reminder: bool,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for Config {
             offline_enabled: false,
             pins: Vec::new(),
             sync_interval_secs: 300,
+            login_start_reminder: true,
         }
     }
 }

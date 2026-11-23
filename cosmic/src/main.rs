@@ -56,5 +56,7 @@ fn main() -> cosmic::iced::Result {
     }
     // Move an old install over in the background; the applet shows `migrate::pending()` meanwhile.
     let _ = rclone_ui_core::migrate::spawn_background();
+    // Remind once per boot if the mount's unit isn't enabled to start at login.
+    rclone_ui_core::autostart::spawn_check();
     cosmic::applet::run::<app::AppModel>(())
 }

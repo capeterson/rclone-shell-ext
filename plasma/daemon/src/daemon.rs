@@ -453,6 +453,8 @@ pub fn run() -> i32 {
     // Move an old install over only now that the name is ours, and off this thread: D-Bus
     // activation must never wait for it. `StatusJson.migration` reports how it is going.
     let _ = rclone_ui_core::migrate::spawn_background();
+    // Remind once per boot if the mount's unit isn't enabled to start at login.
+    rclone_ui_core::autostart::spawn_check();
     let w = shared.clone();
     std::thread::spawn(move || worker(&w, &rx));
     let p = shared.clone();

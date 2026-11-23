@@ -108,10 +108,27 @@ Defaults (stored in `~/.config/rclone-shell-ext/config.toml`, shared by both fro
 | `offline_enabled` | `false` (offline folders; switch on in Settings) |
 | `pins` | `[]` (folders kept offline, relative to the mount) |
 | `sync_interval_secs` | `300` (how often offline folders sync when nothing changes locally) |
+| `login_start_reminder` | `true` (notify once per boot when `service` isn't enabled to start at login; "Don't remind me" sets it to `false`) |
 
 The settings window (`--settings`, or the gear in the popup) covers offline folders and the
 right-click menu entry. Plasma's plasmoid configuration page edits the connection settings
 (`rc_addr`, `env_file`, `service`, `mount_path`, `cache_dir`, `sync_interval_secs`).
+
+**systemd scope.** The app manages systemd *user* units only, through `systemctl --user`, and is
+developed and tested on Fedora. It never writes your mount unit (`service`): you install that
+yourself, and it is enabled only when you ask for it. What it does with systemd:
+
+- reads whether `service` is active, and starts, stops or restarts it from the popup;
+- writes, enables and removes its own offline-folder units and the drop-in on `service`
+  (see [Offline folders](#offline-folders));
+- at start-up of the COSMIC applet or Plasma daemon, checks `systemctl --user is-enabled
+  <service>`. If it says `disabled` (or `enabled-runtime`, which a reboot forgets), you get one
+  notification per boot. **Start at login** runs `systemctl --user enable --now <service>`
+  (the unit needs an `[Install]` section, e.g. `WantedBy=default.target`); **Don't remind me**
+  turns `login_start_reminder` off. A masked, static or missing unit, or a system without
+  systemd, gets no reminder.
+
+Other init systems and system-wide (root) mount units are not supported.
 
 ## Offline folders
 
